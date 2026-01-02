@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-dotenv
+pydantic
+google-cloud-firestore
+google-cloud-storage
+requests
+resend

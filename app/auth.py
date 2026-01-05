@@ -12,7 +12,7 @@ def verify_admin_token(authorization: str = Header(None)):
         decoded_token = firebase_auth.verify_id_token(token)
 
         # Optional: restrict admin access to a specific email
-        admin_email = "buzzysadmin@gmail.com"  # change to your client’s email
+        admin_email = "buzzysentertainment@gmail.com"  # change to your client’s email
         if decoded_token.get("email") != admin_email:
             raise HTTPException(status_code=403, detail="Not authorized")
 

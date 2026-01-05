@@ -1,7 +1,7 @@
 import os
 import json
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
 
 # Load JSON string from environment variable
 json_str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
@@ -15,6 +15,12 @@ json_dict = json.loads(json_str)
 # Initialize Firebase only once
 if not firebase_admin._apps:
     cred = credentials.Certificate(json_dict)
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(cred, {
+        "storageBucket": "buzzysdatabase.firebasestorage.app"
+    })
 
+# Firestore client
 db = firestore.client()
+
+# Firebase Storage bucket
+bucket = storage.bucket()

@@ -5,12 +5,12 @@ from app.auth import verify_admin_token
 router = APIRouter(prefix="/admin/settings", tags=["Admin Settings"])
 
 class ThemeSettings(BaseModel):
-    primaryColor: str = Field(..., regex=r"^#([0-9a-fA-F]{6})$")
-    secondaryColor: str = Field(..., regex=r"^#([0-9a-fA-F]{6})$")
-    accentColor: str = Field(..., regex=r"^#([0-9a-fA-F]{6})$")
-    backgroundColor: str = Field(..., regex=r"^#([0-9a-fA-F]{6})$")
-    cardBackgroundColor: str = Field(..., regex=r"^#([0-9a-fA-F]{6})$")
-    textColor: str = Field(..., regex=r"^#([0-9a-fA-F]{6})$")
+    primaryColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
+    secondaryColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
+    accentColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
+    backgroundColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
+    cardBackgroundColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
+    textColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
     buttonRadius: int = Field(..., ge=0, le=40)
 
 DEFAULT_THEME = {

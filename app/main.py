@@ -1,13 +1,28 @@
 from fastapi import FastAPI, Depends
-from app.routers import email_test, booking
-from app.routers import admin
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.routers import email_test, booking, admin
 from app.auth import verify_admin_token
 from app.services.firebase_setup import db
 
 # -------------------------
-# CREATE THE APP FIRST
+# CREATE APP
 # -------------------------
 app = FastAPI()
+
+# -------------------------
+# CORS CONFIG (PRODUCTION ONLY)
+# -------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://www.buzzys.org",
+        "https://buzzys.org"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -------------------------
 # REGISTER ROUTERS
@@ -25,7 +40,7 @@ def root():
 
 # -------------------------
 # ADMIN: GET ALL BOOKINGS
-# (You can delete this if admin router already has it)
+# (Only accessible with valid admin token)
 # -------------------------
 @app.get("/admin/bookings")
 def get_all_bookings(user=Depends(verify_admin_token)):

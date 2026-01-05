@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import email_test, booking, admin
+from app.routers import settings as settings_router   # ← NEW
 from app.auth import verify_admin_token
 from app.services.firebase_setup import db
 
@@ -30,6 +31,7 @@ app.add_middleware(
 app.include_router(email_test.router)
 app.include_router(booking.router)
 app.include_router(admin.router)
+app.include_router(settings_router.router)   # ← NEW (safe, required)
 
 # -------------------------
 # ROOT ENDPOINT

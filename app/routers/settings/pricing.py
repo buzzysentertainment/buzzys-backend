@@ -4,21 +4,59 @@ from app.services.firebase_setup import db
 
 router = APIRouter()
 
+# Default pricing structure (matches your prices.js)
 DEFAULT_PRICING = {
     "taxRate": 0.09,
     "deliveryFee": 25,
     "weekendSurcharge": 15,
+
+    "items": {
+        # SLIDES
+        "volcano19": { "dry": 390, "wet": 415 },
+        "funSplash15": { "dry": 275, "wet": 325 },
+        "rainbowRush18": { "dry": 375, "wet": 425 },
+        "dolphin16": { "dry": 350, "wet": 400 },
+
+        # COMBOS
+        "doubleJumbo": { "dry": 320, "wet": 355 },
+        "primaryCombo": { "dry": 270, "wet": 320 },
+        "princessCombo": { "dry": 270, "wet": 320 },
+        "whitePrincess": { "dry": 290, "wet": 340 },
+
+        # BOUNCE HOUSES
+        "primaryBounce": { "dry": 270, "wet": 320 },
+
+        # OBSTACLE COURSES
+        "funRunObstacle": { "dry": 370, "wet": 420 },
+
+        # ADD‑ONS
+        "softPlay": { "price": 320 },
+        "foamBlaster": { "price": 275, "extra6Hours": 125 },
+        "snowCone": { "price": 90, "extraSyrup": 25 }
+    }
 }
 
+
+# GET PRICING (admin only)
 @router.get("/pricing")
 def get_pricing(user=Depends(verify_admin_token)):
-    doc = db.collection("settings").document("pricing").get()
+    doc_ref = db.collection("settings").document("pricing")
+    doc = doc_ref.get()
+
+    # If pricing doesn't exist, initialize it
     if not doc.exists:
-        db.collection("settings").document("pricing").set(DEFAULT_PRICING)
+        doc_ref.set(DEFAULT_PRICING)
         return {"pricing": DEFAULT_PRICING}
+
     return {"pricing": doc.to_dict()}
 
-@router.post("/pricing/update")
+
+# UPDATE PRICING (admin only)
+@router.put("/pricing")
 def update_pricing(data: dict, user=Depends(verify_admin_token)):
+    """
+    Accepts full or partial pricing updates.
+    merge=True ensures only changed fields are overwritten.
+    """
     db.collection("settings").document("pricing").set(data, merge=True)
     return {"success": True}

@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from app.services.email_service import send_email
 from app.services.firebase_setup import db
-from square.client import Client
+from squareup.client import Client
 import os
 import uuid
 

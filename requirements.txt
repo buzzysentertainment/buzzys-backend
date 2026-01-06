@@ -8,3 +8,5 @@ requests
 resend
 firebase-admin
 python-multipart>=0.0.5
+passlib[bcrypt]
+bcrypt

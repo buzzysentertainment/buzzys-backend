@@ -115,19 +115,26 @@ def create_checkout(data: dict):
     remaining = round(total_dollars - deposit, 2)
 
     # -------------------------
-    # Build line items (Square requires cents)
-    # Currently charging FULL amount at checkout
+    # Build line items for DEPOSIT ONLY
     # -------------------------
-    line_items = []
-    for item in cart_items:
-        line_items.append({
-            "name": item.get("name", "Item"),
-            "quantity": str(item.get("quantity", 1)),
+    line_items = [
+        {
+            "name": "Total Due Today (35% Deposit)",
+            "quantity": "1",
             "base_price_money": {
-                "amount": int(float(item.get("price", 0)) * 100),  # dollars → cents
+                "amount": int(deposit * 100),  # charge ONLY the deposit
                 "currency": "USD"
             }
-        })
+        },
+        {
+            "name": f"Remaining Balance Due on Event Date (${remaining:.2f})",
+            "quantity": "1",
+            "base_price_money": {
+                "amount": 0,  # informational only
+                "currency": "USD"
+            }
+        }
+    ]
 
     # -------------------------
     # Build Square order body
@@ -229,7 +236,6 @@ def create_checkout(data: dict):
                 square_due_date = event_date.strftime("%Y-%m-%d")
             except Exception as e:
                 print("DATE PARSE ERROR:", e)
-                # Fallback: due today if parsing fails
                 square_due_date = datetime.utcnow().strftime("%Y-%m-%d")
 
             # -------------------------

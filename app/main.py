@@ -33,7 +33,9 @@ app.add_middleware(
     allow_origins=[
         "https://www.buzzys.org",
         "https://buzzys.org",
-        "https://buzzysdatabase.web.app"  # Firebase hosting
+        "https://buzzysdatabase.web.app",  # Firebase hosting
+        "https://buzzys.org/",
+        "https://www.buzzys.org/",
     ],
     allow_credentials=True,
     allow_methods=["*"],

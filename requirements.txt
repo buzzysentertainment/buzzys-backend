@@ -10,4 +10,4 @@ firebase-admin
 python-multipart>=0.0.5
 passlib[bcrypt]
 bcrypt
-squareup
+squareup==36.0.0.20240417

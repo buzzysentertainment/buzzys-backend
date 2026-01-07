@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from app.services.email_service import send_email
 from app.services.firebase_setup import db
@@ -52,39 +52,74 @@ def get_all_bookings():
     return [doc.to_dict() for doc in docs]
 
 # -------------------------
-# Create Square Checkout Link (NEW)
+# Create Square Checkout Link (UPDATED + ALIGNED)
 # -------------------------
-client = Client(
-    access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
-    environment="production"
-)
-
 @router.post("/create-checkout")
 def create_checkout(data: dict):
-    amount = int(data["amount"] * 100)  # convert dollars → cents
-    redirect_url = data["redirectUrl"]
-
-    body = {
-        "idempotency_key": str(uuid.uuid4()),
-        "order": {
-            "location_id": os.getenv("SQUARE_LOCATION_ID"),
-            "line_items": [
-                {
-                    "name": "Booking Deposit",
-                    "quantity": "1",
-                    "base_price_money": {
-                        "amount": amount,
-                        "currency": "USD"
-                    }
-                }
-            ]
-        },
-        "redirect_url": redirect_url
-    }
-
-    result = client.checkout.create_checkout(
-        location_id=os.getenv("SQUARE_LOCATION_ID"),
-        body=body
+    client = Client(
+        access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
+        environment="production"
     )
 
+    location_id = os.getenv("SQUARE_LOCATION_ID")
+    redirect_url = "https://www.buzzys.org/booking-success"
+
+    # Extract cart items
+    cart_items = data.get("cart", [])
+    if not cart_items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    # Extract delivery address
+    delivery_address = data.get("address", {})
+
+    # Extract time slot + time period
+    time_slot = data.get("timeSlot", "")
+    time_period = data.get("timePeriod", "")
+
+    # Build line items
+    line_items = []
+    for item in cart_items:
+        line_items.append({
+            "name": item.get("name", "Item"),
+            "quantity": str(item.get("quantity", 1)),
+            "base_price_money": {
+                "amount": int(item.get("price", 0)),  # cents
+                "currency": "USD"
+            }
+        })
+
+    # Build request body for Square
+    body = {
+        "idempotency_key": str(uuid.uuid4()),  # REQUIRED
+        "order": {
+            "idempotency_key": str(uuid.uuid4()),  # REQUIRED
+            "location_id": location_id,
+            "line_items": line_items,
+            "note": (
+                f"Delivery Address: {delivery_address.get('address_line_1', '')}, "
+                f"{delivery_address.get('locality', '')}, "
+                f"{delivery_address.get('administrative_district_level_1', '')} "
+                f"{delivery_address.get('postal_code', '')} | "
+                f"Time Slot: {time_slot} | "
+                f"Time Period: {time_period}"
+            )
+        },
+        "checkout_options": {
+            "redirect_url": redirect_url,
+            "ask_for_shipping_address": True,
+            "pre_populate_shipping_address": delivery_address
+        }
+    }
+
+    print("SENDING TO SQUARE:", body)
+
+    # Use the NEW endpoint (payment links)
+    result = client.checkout.create_payment_link(body)
+
+    # Handle Square errors
+    if "errors" in result.body:
+        print("SQUARE ERROR:", result.body["errors"])
+        raise HTTPException(status_code=500, detail="Square checkout failed")
+
+    # Return checkout URL
     return {"checkoutUrl": result.body["checkout"]["checkout_page_url"]}

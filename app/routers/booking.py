@@ -52,7 +52,7 @@ def get_all_bookings():
     return [doc.to_dict() for doc in docs]
 
 # -------------------------
-# Create Square Checkout Link (UPDATED + FIXED)
+# Create Square Checkout Link (FIXED + UPDATED)
 # -------------------------
 @router.post("/create-checkout")
 def create_checkout(data: dict):
@@ -116,10 +116,17 @@ def create_checkout(data: dict):
     # Create payment link
     result = client.checkout.create_payment_link(body)
 
-    # 🔥 REQUIRED: Handle Square errors BEFORE accessing checkout
+    # Handle Square errors
     if "errors" in result.body:
         print("SQUARE ERROR:", result.body["errors"])
         raise HTTPException(status_code=500, detail="Square checkout failed")
 
-    # Return checkout URL
-    return {"checkoutUrl": result.body["checkout"]["checkout_page_url"]}
+    # NEW: Square's updated API returns payment_link.url
+    payment_link = result.body.get("payment_link", {})
+    checkout_url = payment_link.get("url")
+
+    if not checkout_url:
+        print("SQUARE RESPONSE MISSING URL:", result.body)
+        raise HTTPException(status_code=500, detail="Square did not return a checkout URL")
+
+    return {"checkoutUrl": checkout_url}

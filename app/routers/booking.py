@@ -52,7 +52,7 @@ def get_all_bookings():
     return [doc.to_dict() for doc in docs]
 
 # -------------------------
-# Create Square Checkout Link (UPDATED + ALIGNED)
+# Create Square Checkout Link (UPDATED + FIXED)
 # -------------------------
 @router.post("/create-checkout")
 def create_checkout(data: dict):
@@ -90,9 +90,9 @@ def create_checkout(data: dict):
 
     # Build request body for Square
     body = {
-        "idempotency_key": str(uuid.uuid4()),  # REQUIRED
+        "idempotency_key": str(uuid.uuid4()),
         "order": {
-            "idempotency_key": str(uuid.uuid4()),  # REQUIRED
+            "idempotency_key": str(uuid.uuid4()),
             "location_id": location_id,
             "line_items": line_items,
             "note": (
@@ -113,10 +113,10 @@ def create_checkout(data: dict):
 
     print("SENDING TO SQUARE:", body)
 
-    # Use the NEW endpoint (payment links)
+    # Create payment link
     result = client.checkout.create_payment_link(body)
 
-    # Handle Square errors
+    # 🔥 REQUIRED: Handle Square errors BEFORE accessing checkout
     if "errors" in result.body:
         print("SQUARE ERROR:", result.body["errors"])
         raise HTTPException(status_code=500, detail="Square checkout failed")

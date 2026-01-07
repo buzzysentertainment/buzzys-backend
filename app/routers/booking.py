@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from app.services.email_service import send_email
 from app.services.firebase_setup import db
-from squareup.client import Client
+from square.client import SquareClient
 import os
 import uuid
 
@@ -54,7 +54,7 @@ def get_all_bookings():
 # -------------------------
 # Create Square Checkout Link (NEW)
 # -------------------------
-client = Client(
+client = SquareClient(
     access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
     environment="production"
 )

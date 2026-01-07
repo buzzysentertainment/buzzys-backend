@@ -76,7 +76,7 @@ def get_all_bookings():
 
 
 # -------------------------
-# Create Square Checkout Link
+# Create Square Checkout Link + Invoice
 # -------------------------
 @router.post("/create-checkout")
 def create_checkout(data: dict):
@@ -98,7 +98,7 @@ def create_checkout(data: dict):
     customer_name = data.get("name", "")
     customer_email = data.get("email", "")
     customer_phone = data.get("phone", "")
-    booking_date = data.get("date", "")
+    booking_date = data.get("date", "")  # format: MM/DD/YYYY
 
     delivery_address = data.get("address", {})
     time_slot = data.get("timeSlot", "")
@@ -116,6 +116,7 @@ def create_checkout(data: dict):
 
     # -------------------------
     # Build line items (Square requires cents)
+    # Currently charging FULL amount at checkout
     # -------------------------
     line_items = []
     for item in cart_items:
@@ -199,29 +200,124 @@ def create_checkout(data: dict):
         "created_at": datetime.utcnow().isoformat(),
     }
 
+    # -------------------------
+    # Create Square Customer (for invoice)
+    # -------------------------
+    invoice_id = None
+    invoice_url = None
+
+    try:
+        customer_body = {
+            "idempotency_key": str(uuid.uuid4()),
+            "given_name": customer_name,
+            "email_address": customer_email,
+            "phone_number": customer_phone
+        }
+
+        customer_result = client.customers.create_customer(customer_body)
+
+        if "errors" in customer_result.body:
+            print("SQUARE CUSTOMER ERROR:", customer_result.body["errors"])
+        else:
+            customer_id = customer_result.body["customer"]["id"]
+
+            # -------------------------
+            # Parse event date (MM/DD/YYYY → YYYY-MM-DD)
+            # -------------------------
+            try:
+                event_date = datetime.strptime(booking_date, "%m/%d/%Y")
+                square_due_date = event_date.strftime("%Y-%m-%d")
+            except Exception as e:
+                print("DATE PARSE ERROR:", e)
+                # Fallback: due today if parsing fails
+                square_due_date = datetime.utcnow().strftime("%Y-%m-%d")
+
+            # -------------------------
+            # Create invoice for remaining balance
+            # -------------------------
+            invoice_body = {
+                "idempotency_key": str(uuid.uuid4()),
+                "invoice": {
+                    "location_id": location_id,
+                    "customer_id": customer_id,
+                    "title": "Remaining Balance for Buzzy’s Booking",
+                    "description": f"Remaining balance for event on {booking_date}",
+                    "payment_requests": [
+                        {
+                            "request_type": "BALANCE",
+                            "due_date": square_due_date,
+                            "tipping_enabled": False,
+                            "fixed_amount_requested_money": {
+                                "amount": int(remaining * 100),
+                                "currency": "USD"
+                            }
+                        }
+                    ]
+                }
+            }
+
+            invoice_result = client.invoices.create_invoice(invoice_body)
+
+            if "errors" in invoice_result.body:
+                print("SQUARE INVOICE ERROR:", invoice_result.body["errors"])
+            else:
+                invoice_id = invoice_result.body["invoice"]["id"]
+                invoice_version = invoice_result.body["invoice"]["version"]
+
+                publish_result = client.invoices.publish_invoice(
+                    invoice_id=invoice_id,
+                    body={"version": invoice_version}
+                )
+
+                if "errors" in publish_result.body:
+                    print("SQUARE INVOICE PUBLISH ERROR:", publish_result.body["errors"])
+                else:
+                    invoice_url = publish_result.body["invoice"].get("public_url")
+                    print("INVOICE CREATED AND PUBLISHED:", invoice_id, invoice_url)
+
+    except Exception as e:
+        print("Failed to create or publish invoice:", e)
+
+    # -------------------------
+    # Attach invoice info to booking record (if created)
+    # -------------------------
+    if invoice_id:
+        booking_record["invoice_id"] = invoice_id
+    if invoice_url:
+        booking_record["invoice_url"] = invoice_url
+
+    # Save booking to Firestore
     db.collection("bookings").add(booking_record)
 
     # -------------------------
-    # Send admin email (optional but powerful)
+    # Send admin email
     # -------------------------
     try:
+        admin_html = (
+            f"<p>New booking started by {customer_name} for {booking_date}.</p>"
+            f"<p>Total: ${total_dollars:.2f}<br>"
+            f"Deposit (35%): ${deposit:.2f}<br>"
+            f"Remaining: ${remaining:.2f}</p>"
+            f"<p>Time Slot: {time_slot}<br>"
+            f"Time Period: {time_period}</p>"
+            f"<p>Checkout Link: <a href='{checkout_url}'>{checkout_url}</a></p>"
+        )
+        if invoice_url:
+            admin_html += f"<p>Invoice Link (Remaining Balance): <a href='{invoice_url}'>{invoice_url}</a></p>"
+
         send_email(
             to="admin@buzzys.org",
             subject="New Booking Checkout Started",
-            html=(
-                f"<p>New booking started by {customer_name} for {booking_date}.</p>"
-                f"<p>Total: ${total_dollars:.2f}<br>"
-                f"Deposit (35%): ${deposit:.2f}<br>"
-                f"Remaining: ${remaining:.2f}</p>"
-                f"<p>Time Slot: {time_slot}<br>"
-                f"Time Period: {time_period}</p>"
-                f"<p>Checkout Link: <a href='{checkout_url}'>{checkout_url}</a></p>"
-            )
+            html=admin_html
         )
     except Exception as e:
         print("Failed to send admin email:", e)
 
     # -------------------------
-    # Return checkout URL to frontend
+    # Return checkout URL (and invoice URL if created)
     # -------------------------
-    return {"checkoutUrl": checkout_url}
+    response = {"checkoutUrl": checkout_url}
+    if invoice_url:
+        response["invoiceUrl"] = invoice_url
+
+    return response

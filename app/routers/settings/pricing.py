@@ -37,21 +37,51 @@ DEFAULT_PRICING = {
 }
 
 
-# GET PRICING (admin only)
+# -------------------------------------------------
+# GET PRICING (admin only) — WITH AUTO‑REPAIR
+# -------------------------------------------------
 @router.get("/pricing")
 def get_pricing(user=Depends(verify_admin_token)):
     doc_ref = db.collection("settings").document("pricing")
     doc = doc_ref.get()
 
-    # If pricing doesn't exist, initialize it
-    if not doc.exists:
+    # Load existing data if present
+    data = doc.to_dict() if doc.exists else None
+
+    # If missing entirely OR missing items → rebuild full structure
+    if not data or "items" not in data or not isinstance(data.get("items"), dict):
         doc_ref.set(DEFAULT_PRICING)
         return {"pricing": DEFAULT_PRICING}
 
-    return {"pricing": doc.to_dict()}
+    repaired = False
+
+    # Ensure all top-level fields exist
+    for key, value in DEFAULT_PRICING.items():
+        if key not in data:
+            data[key] = value
+            repaired = True
+
+    # Ensure items object exists
+    if "items" not in data or not isinstance(data["items"], dict):
+        data["items"] = DEFAULT_PRICING["items"]
+        repaired = True
+
+    # Ensure each inflatable/add-on exists
+    for item_key, item_value in DEFAULT_PRICING["items"].items():
+        if item_key not in data["items"]:
+            data["items"][item_key] = item_value
+            repaired = True
+
+    # Write repaired version back to Firestore
+    if repaired:
+        doc_ref.set(data)
+
+    return {"pricing": data}
 
 
+# -------------------------------------------------
 # UPDATE PRICING (admin only)
+# -------------------------------------------------
 @router.put("/pricing")
 def update_pricing(data: dict, user=Depends(verify_admin_token)):
     """

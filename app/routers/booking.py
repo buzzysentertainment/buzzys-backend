@@ -10,6 +10,14 @@ import hmac
 import hashlib
 import base64
 
+# Automation triggers
+from app.triggers.on_contract_received import handle_contract_received
+from app.triggers.on_deposit_received import handle_deposit_received
+from app.triggers.on_payment_declined import handle_payment_declined
+from app.triggers.on_balance_paid import handle_balance_paid
+from app.triggers.on_refund_issued import handle_refund_issued
+from app.triggers.on_event_canceled import handle_event_canceled
+
 router = APIRouter(prefix="/book", tags=["booking"])
 
 
@@ -231,7 +239,16 @@ def update_booking(booking_id: str, data: dict):
 
     doc_ref.update(new_data)
 
-    # (Triggers temporarily disabled until files are recreated)
+    # Contract Received automation
+    if (
+        old_data.get("contractStatus") != "received"
+        and new_data.get("contractStatus") == "received"
+    ):
+        handle_contract_received(new_data)
+
+    # Event Canceled automation
+    if old_data.get("status") != "canceled" and new_data.get("status") == "canceled":
+        handle_event_canceled(new_data)
 
     return {"status": "success", "updated": new_data}
 
@@ -264,6 +281,92 @@ async def square_webhook(request: Request):
 
     print("SQUARE WEBHOOK RECEIVED:", event_type)
 
-    # (Triggers temporarily disabled until files are recreated)
+    # Handle payment updates
+    if event_type == "payment.updated":
+        payment = data_object.get("payment", {})
+        status = payment.get("status")
+        amount_money = payment.get("amount_money", {}) or {}
+        total_amount = amount_money.get("amount")
+        total_amount_dollars = (total_amount or 0) / 100.0
+
+        client = Client(
+            access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
+            environment="production",
+        )
+
+        order_id = payment.get("order_id")
+        booking_id = None
+
+        if order_id:
+            try:
+                order_result = client.orders.retrieve_order(order_id=order_id)
+                if "errors" not in order_result.body:
+                    order = order_result.body.get("order", {})
+                    note = order.get("note", "") or ""
+                    if "BookingID:" in note:
+                        part = note.split("BookingID:")[1]
+                        booking_id = part.split("|")[0].strip()
+            except Exception as e:
+                print("FAILED TO RETRIEVE ORDER:", e)
+
+        if not booking_id:
+            print("No booking_id found for payment webhook")
+            return {"status": "ignored"}
+
+        doc_ref = db.collection("bookings").document(booking_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            print("Booking not found for webhook booking_id:", booking_id)
+            return {"status": "ignored"}
+
+        booking = doc.to_dict()
+
+        # Deposit Received
+        if status == "COMPLETED" and booking.get("paymentStatus") != "deposit_paid":
+            doc_ref.update({"paymentStatus": "deposit_paid"})
+            booking["paymentStatus"] = "deposit_paid"
+            handle_deposit_received(booking)
+
+        # Payment Declined
+        elif status in ("FAILED", "CANCELED"):
+            doc_ref.update({"paymentStatus": "failed"})
+            booking["paymentStatus"] = "failed"
+            handle_payment_declined(booking)
+
+    # Handle invoice updates
+    if event_type == "invoice.updated":
+        invoice = data_object.get("invoice", {})
+        status = invoice.get("status")
+        invoice_id = invoice.get("id")
+
+        query = (
+            db.collection("bookings")
+            .where("invoice_id", "==", invoice_id)
+            .limit(1)
+            .stream()
+        )
+
+        booking_doc = None
+        for d in query:
+            booking_doc = d
+            break
+
+        if not booking_doc:
+            print("No booking found for invoice_id:", invoice_id)
+            return {"status": "ignored"}
+
+        booking = booking_doc.to_dict()
+        doc_ref = db.collection("bookings").document(booking["booking_id"])
+
+        # Balance Paid
+        if status == "PAID":
+            doc_ref.update({"paymentStatus": "balance_paid"})
+            booking["paymentStatus"] = "balance_paid"
+            handle_balance_paid(booking)
+
+        # Refund Issued
+        if status in ("CANCELED", "REFUNDED"):
+            remaining = float(booking.get("remaining", 0))
+            handle_refund_issued(booking, amount=remaining)
 
     return {"status": "ok"}

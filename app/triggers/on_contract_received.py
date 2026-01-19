@@ -1,19 +1,17 @@
-from app.services.email_service import send_email
-from app.email_templates.contract_received import contract_received_template
+import os
+from app.services.email_service import send_email_template
 
 def handle_contract_received(booking: dict):
-    """
-    Triggered when a customer marks their contract as received.
-    Sends a confirmation email to the customer.
-    """
-    html = contract_received_template(
-        customer_name=booking.get("customerName"),
-        event_date=booking.get("eventDate"),
-        event_name=booking.get("eventName")
-    )
+    template_id = os.getenv("RESEND_CONTRACT_RECEIVED_TEMPLATE_ID")
 
-    return send_email(
+    data = {
+        "customer_name": booking.get("customerName"),
+        "event_date": booking.get("eventDate"),
+        "event_name": booking.get("eventName")
+    }
+
+    return send_email_template(
         to=booking.get("customerEmail"),
-        subject="We Received Your Contract",
-        html=html
+        template_id=template_id,
+        data=data
     )

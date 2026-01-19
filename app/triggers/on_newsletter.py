@@ -1,11 +1,11 @@
-from app.services.email_service import send_email
-from app.email_templates.newsletter import newsletter_template
+import os
+from app.services.email_service import send_email_template
 
-def send_newsletter(to_email: str, title: str, body_html: str):
-    html = newsletter_template(title, body_html)
+def handle_newsletter(email: str, data: dict):
+    template_id = os.getenv("RESEND_NEWSLETTER_TEMPLATE_ID")
 
-    return send_email(
-        to=to_email,
-        subject=title,
-        html=html
+    return send_email_template(
+        to=email,
+        template_id=template_id,
+        data=data
     )

@@ -1,16 +1,17 @@
-from app.services.email_service import send_email
-from app.email_templates.review_request import review_request_template
+import os
+from app.services.email_service import send_email_template
 
 def handle_review_request(booking: dict):
-    review_link = "https://g.page/r/Cc9k0Q2xJtNfEBM/review"  # your actual Google review link
+    template_id = os.getenv("RESEND_REVIEW_REQUEST_TEMPLATE_ID")
 
-    html = review_request_template(
-        customer_name=booking["name"],
-        review_link=review_link
-    )
+    data = {
+        "customer_name": booking.get("customerName"),
+        "event_date": booking.get("eventDate"),
+        "review_link": booking.get("reviewLink")
+    }
 
-    return send_email(
-        to=booking["email"],
-        subject="How Was Your Experience With Buzzy’s?",
-        html=html
+    return send_email_template(
+        to=booking.get("customerEmail"),
+        template_id=template_id,
+        data=data
     )

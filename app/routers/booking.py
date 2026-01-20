@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from app.services.email_service import send_email
+from app.services.email_service import send_email_template   # UPDATED
 from app.services.firebase_setup import db
 from square.client import Client
 from datetime import datetime
@@ -55,27 +55,30 @@ def create_booking(booking: Booking):
 
     db.collection("bookings").document(booking_id).set(booking_data)
 
-    # Customer confirmation email
-    send_email(
+    # Customer confirmation email (UPDATED)
+    send_email_template(
         to=booking.email,
-        subject="Your Buzzy’s Booking Confirmation",
-        html=(
-            f"<h1>Thanks {booking.name}!</h1>"
-            f"<p>Your booking for {booking.date} is confirmed.</p>"
-            f"<p>Total: ${total:.2f}<br>"
-            f"Deposit (35%): ${deposit:.2f}<br>"
-            f"Remaining: ${remaining:.2f}</p>"
-        ),
+        template_id=os.getenv("RESEND_BOOKING_CONFIRMATION_TEMPLATE"),
+        data={
+            "name": booking.name,
+            "date": booking.date,
+            "total": total,
+            "deposit": deposit,
+            "remaining": remaining
+        }
     )
 
-    # Admin alert
-    send_email(
+    # Admin alert (UPDATED)
+    send_email_template(
         to="admin@buzzys.org",
-        subject="New Booking Received",
-        html=(
-            f"<p>New booking from {booking.name} on {booking.date}.</p>"
-            f"<p>Total: ${total:.2f} | Deposit: ${deposit:.2f}</p>"
-        ),
+        template_id=os.getenv("RESEND_ADMIN_NEW_BOOKING_TEMPLATE"),
+        data={
+            "name": booking.name,
+            "date": booking.date,
+            "total": total,
+            "deposit": deposit,
+            "remaining": remaining
+        }
     )
 
     return {"status": "success", "message": "Booking received", "booking_id": booking_id}
@@ -207,16 +210,18 @@ def create_checkout(data: dict):
 
     db.collection("bookings").document(booking_id).set(booking_record)
 
-    send_email(
+    # Admin alert for checkout started (UPDATED)
+    send_email_template(
         to="admin@buzzys.org",
-        subject="New Booking Checkout Started",
-        html=(
-            f"<p>New booking started by {customer_name} for {booking_date}.</p>"
-            f"<p>Total: ${total_dollars:.2f}<br>"
-            f"Deposit (35%): ${deposit:.2f}<br>"
-            f"Remaining: ${remaining:.2f}</p>"
-            f"<p>Checkout Link: <a href='{checkout_url}'>{checkout_url}</a></p>"
-        ),
+        template_id=os.getenv("RESEND_ADMIN_CHECKOUT_STARTED_TEMPLATE"),
+        data={
+            "name": customer_name,
+            "date": booking_date,
+            "total": total_dollars,
+            "deposit": deposit,
+            "remaining": remaining,
+            "checkout_url": checkout_url
+        }
     )
 
     response = {"checkoutUrl": checkout_url}

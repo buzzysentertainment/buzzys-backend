@@ -1,12 +1,17 @@
 from fastapi import APIRouter
-from app.services.email_service import send_email
+from app.services.email_service import send_email_template
+import os
 
 router = APIRouter(prefix="/test-email", tags=["email"])
 
 @router.get("/")
 def test_email():
-    return send_email(
+    template_id = os.getenv("RESEND_TEST_TEMPLATE_ID")
+
+    return send_email_template(
         to="your-email@example.com",
-        subject="Test Email from Buzzy’s Backend",
-        html="<h1>Hello Emma!</h1><p>Your backend email system works.</p>"
+        template_id=template_id,
+        data={
+            "message": "Your backend email system works with Resend templates."
+        }
     )

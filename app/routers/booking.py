@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from app.services.email_service import send_email_template   # UPDATED
+from app.services.email_service import send_email_template
 from app.services.firebase_setup import db
 from square.client import Client
 from datetime import datetime
@@ -66,7 +66,6 @@ def create_booking(booking: Booking):
 
     db.collection("bookings").document(booking_id).set(booking_data)
 
-    # Customer confirmation email (UPDATED)
     send_email_template(
         to=booking.email,
         template_id=os.getenv("RESEND_BOOKING_CONFIRMATION_TEMPLATE"),
@@ -79,7 +78,6 @@ def create_booking(booking: Booking):
         }
     )
 
-    # Admin alert (UPDATED)
     send_email_template(
         to="admin@buzzys.org",
         template_id=os.getenv("RESEND_ADMIN_NEW_BOOKING_TEMPLATE"),
@@ -159,13 +157,17 @@ def create_checkout(data: dict):
     if not cart_items:
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    customer_name = data.get("name", "")
-    customer_email = data.get("email", "")
-    customer_phone = data.get("phone", "")
-    booking_date = data.get("date", "")
-    referral_type = data.get("referralType", "None") # Friend, Repeat, None
+    # Aligning frontend fields with backend logic
+    customer_name = data.get("customerName") or data.get("name", "Valued Customer")
+    customer_email = data.get("customerEmail") or data.get("email", "")
+    customer_phone = data.get("customerPhone") or data.get("phone", "")
+    booking_date = data.get("eventDate") or data.get("date", "")
+    
+    referral_type = data.get("referralType", "None") 
     is_tax_exempt = data.get("isTaxExempt", False)
     damage_waiver_opt = data.get("damageWaiver", False)
+    signature = data.get("signature", "Electronic Signature")
+    
     distance_charge = float(data.get("distanceCharge", 0))
     staff_fee = float(data.get("staffFee", 0))
     
@@ -179,36 +181,29 @@ def create_checkout(data: dict):
         discount_amount = raw_subtotal * 0.10
         
     subtotal_after_discount = raw_subtotal - discount_amount
-    
-    #Damage Waiver (8% of discounted subtotal)
     waiver_fee = round(subtotal_after_discount * 0.08, 2) if damage_waiver_opt else 0
     
-    # Tax (7%)
     taxable_amount = subtotal_after_discount + waiver_fee + distance_charge
     tax_total = round(taxable_amount * 0.07, 2) if not is_tax_exempt else 0
     
-    # Grand Total
     total_dollars = taxable_amount + tax_total + staff_fee
     
-    # Deposit and Remaining
     deposit = round(total_dollars * 0.35, 2)
     remaining = round(total_dollars - deposit, 2)
     
     booking_id = str(uuid.uuid4())
     
-    delivery_address = data.get("address", {})
+    # ADDRESS SAFETY FIX: Check if it's a string (new cart) or dict (old cart)
+    address_input = data.get("address", "Address Not Provided")
+    if isinstance(address_input, dict):
+        delivery_address_display = f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}"
+        pre_populate_address = address_input
+    else:
+        delivery_address_display = address_input
+        pre_populate_address = {"address_line_1": address_input}
+
     time_slot = data.get("timeSlot", "")
     time_period = data.get("timePeriod", "")
-    
-
-    total_dollars = sum(
-        float(item.get("price", 0)) * int(item.get("quantity", 1))
-        for item in cart_items
-    )
-    deposit = round(total_dollars * 0.35, 2)
-    remaining = round(total_dollars - deposit, 2)
-
-    booking_id = str(uuid.uuid4())
 
     line_items = [
         {
@@ -239,23 +234,15 @@ def create_checkout(data: dict):
                 f"BookingID: {booking_id} | "
                 f"Customer: {customer_name} | "
                 f"Email: {customer_email} | "
-                f"Phone: {customer_phone} | "
                 f"Date: {booking_date} | "
-                f"Delivery Address: {delivery_address.get('address_line_1', '')}, "
-                f"{delivery_address.get('locality', '')}, "
-                f"{delivery_address.get('administrative_district_level_1', '')} "
-                f"{delivery_address.get('postal_code', '')} | "
-                f"Time Slot: {time_slot} | "
-                f"Time Period: {time_period} | "
+                f"Address: {delivery_address_display} | "
                 f"Total: ${total_dollars:.2f} | "
-                f"Deposit (35%): ${deposit:.2f} | "
-                f"Remaining: ${remaining:.2f}"
+                f"Signed: {signature}"
             ),
         },
         "checkout_options": {
             "redirect_url": redirect_url,
-            "ask_for_shipping_address": True,
-            "pre_populate_shipping_address": delivery_address,
+            "ask_for_shipping_address": False, # Set to False since we have the address
             "enable_tipping": True,
         },
     }
@@ -263,6 +250,7 @@ def create_checkout(data: dict):
     result = client.checkout.create_payment_link(body)
 
     if "errors" in result.body:
+        print("SQUARE ERRORS:", result.body['errors'])
         raise HTTPException(status_code=500, detail="Square checkout failed")
 
     payment_link = result.body.get("payment_link", {})
@@ -278,6 +266,8 @@ def create_checkout(data: dict):
         "phone": customer_phone,
         "date": booking_date,
         "items": cart_items,
+        "signature": signature,
+        "damageWaiver": damage_waiver_opt,
         "pricing_breakdown": {
             "subtotal": raw_subtotal,
             "discount": discount_amount,
@@ -289,10 +279,7 @@ def create_checkout(data: dict):
         },
         "deposit": deposit,
         "remaining": remaining,
-        "referralType": referral_type,
-        "isTaxExempt": is_tax_exempt,
-        "paymentStatus": "pending",
-        "address": delivery_address,
+        "address": delivery_address_display,
         "timeSlot": time_slot,
         "timePeriod": time_period,
         "checkout_url": checkout_url,
@@ -304,7 +291,6 @@ def create_checkout(data: dict):
 
     db.collection("bookings").document(booking_id).set(booking_record)
 
-    # Admin alert for checkout started (UPDATED)
     send_email_template(
         to=["buzzysentertainment@gmail.com", "kandy.stamey@gmail.com"],
         template_id=os.getenv("RESEND_ADMIN_CHECKOUT_STARTED_TEMPLATE"),
@@ -318,8 +304,7 @@ def create_checkout(data: dict):
         }
     )
 
-    response = {"checkoutUrl": checkout_url}
-    return response
+    return {"checkoutUrl": checkout_url}
 
 
 # -------------------------
@@ -338,14 +323,12 @@ def update_booking(booking_id: str, data: dict):
 
     doc_ref.update(new_data)
 
-    # Contract Received automation
     if (
         old_data.get("contractStatus") != "received"
         and new_data.get("contractStatus") == "received"
     ):
         handle_contract_received(new_data)
 
-    # Event Canceled automation
     if old_data.get("status") != "canceled" and new_data.get("status") == "canceled":
         handle_event_canceled(new_data)
 
@@ -380,14 +363,10 @@ async def square_webhook(request: Request):
 
     print("SQUARE WEBHOOK RECEIVED:", event_type)
 
-    # Handle payment updates
     if event_type == "payment.updated":
         payment = data_object.get("payment", {})
         status = payment.get("status")
-        amount_money = payment.get("amount_money", {}) or {}
-        total_amount = amount_money.get("amount")
-        total_amount_dollars = (total_amount or 0) / 100.0
-
+        
         client = Client(
             access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
             environment="production",
@@ -409,30 +388,25 @@ async def square_webhook(request: Request):
                 print("FAILED TO RETRIEVE ORDER:", e)
 
         if not booking_id:
-            print("No booking_id found for payment webhook")
             return {"status": "ignored"}
 
         doc_ref = db.collection("bookings").document(booking_id)
         doc = doc_ref.get()
         if not doc.exists:
-            print("Booking not found for webhook booking_id:", booking_id)
             return {"status": "ignored"}
 
         booking = doc.to_dict()
 
-        # Deposit Received
         if status == "COMPLETED" and booking.get("paymentStatus") != "deposit_paid":
             doc_ref.update({"paymentStatus": "deposit_paid"})
             booking["paymentStatus"] = "deposit_paid"
             handle_deposit_received(booking)
 
-        # Payment Declined
         elif status in ("FAILED", "CANCELED"):
             doc_ref.update({"paymentStatus": "failed"})
             booking["paymentStatus"] = "failed"
             handle_payment_declined(booking)
 
-    # Handle invoice updates
     if event_type == "invoice.updated":
         invoice = data_object.get("invoice", {})
         status = invoice.get("status")
@@ -451,19 +425,16 @@ async def square_webhook(request: Request):
             break
 
         if not booking_doc:
-            print("No booking found for invoice_id:", invoice_id)
             return {"status": "ignored"}
 
         booking = booking_doc.to_dict()
         doc_ref = db.collection("bookings").document(booking["booking_id"])
 
-        # Balance Paid
         if status == "PAID":
             doc_ref.update({"paymentStatus": "balance_paid"})
             booking["paymentStatus"] = "balance_paid"
             handle_balance_paid(booking)
 
-        # Refund Issued
         if status in ("CANCELED", "REFUNDED"):
             remaining = float(booking.get("remaining", 0))
             handle_refund_issued(booking, amount=remaining)

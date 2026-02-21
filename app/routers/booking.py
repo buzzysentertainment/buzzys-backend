@@ -285,8 +285,8 @@ def create_checkout(data: dict):
             "tax": tax_total,
             "distance": distance_charge,
             "staff": staff_fee,
-            "total": total_dollars,
-        }
+            "total": total_dollars
+        },
         "deposit": deposit,
         "remaining": remaining,
         "referralType": referral_type,

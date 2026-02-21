@@ -17,8 +17,19 @@ from app.triggers.on_payment_declined import handle_payment_declined
 from app.triggers.on_balance_paid import handle_balance_paid
 from app.triggers.on_refund_issued import handle_refund_issued
 from app.triggers.on_event_canceled import handle_event_canceled
+from app.triggers.on_event_reminder import handle_event_reminder
 
 router = APIRouter(prefix="/book", tags=["booking"])
+
+# -------------------------
+# Event Reminder Helper
+# -------------------------
+def send_event_day_reminder(booking):
+    try:
+        handle_event_reminder(booking)
+        return {"status": "success", "message": "Event reminder sent"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 # -------------------------
@@ -94,6 +105,44 @@ def get_all_bookings():
 
 
 # -------------------------
+# Send Reminder for a Single Booking
+# -------------------------
+@router.post("/{booking_id}/send-reminder")
+def send_reminder(booking_id: str):
+    doc_ref = db.collection("bookings").document(booking_id)
+    doc = doc_ref.get()
+
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    booking = doc.to_dict()
+    return send_event_day_reminder(booking)
+
+
+# -------------------------
+# Send Reminders for All Events Happening Today
+# -------------------------
+@router.post("/send-today-reminders")
+def send_today_reminders():
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    docs = (
+        db.collection("bookings")
+        .where("date", "==", today)
+        .where("status", "==", "active")
+        .stream()
+    )
+
+    sent = []
+    for doc in docs:
+        booking = doc.to_dict()
+        send_event_day_reminder(booking)
+        sent.append(booking.get("booking_id"))
+
+    return {"status": "success", "reminders_sent": sent}
+
+
+# -------------------------
 # Create Square Checkout Link
 # -------------------------
 @router.post("/create-checkout")
@@ -114,10 +163,43 @@ def create_checkout(data: dict):
     customer_email = data.get("email", "")
     customer_phone = data.get("phone", "")
     booking_date = data.get("date", "")
-
+    referral_type = data.get("referralType", "None") # Friend, Repeat, None
+    is_tax_exempt = data.get("isTaxExempt", False)
+    damage_waiver_opt = data.get("damageWaiver", False)
+    distance_charge = float(data.get("distanceCharge", 0))
+    staff_fee = float(data.get("staffFee", 0))
+    
+    raw_subtotal = sum(float(item.get("price", 0)) for item in cart_items)
+    
+    # Referral Discounts
+    discount_amount = 0
+    if referral_type == "Friend":
+        discount_amount = raw_subtotal * 0.05
+    elif referral_type == "Repeat":
+        discount_amount = raw_subtotal * 0.10
+        
+    subtotal_after_discount = raw_subtotal - discount_amount
+    
+    #Damage Waiver (8% of discounted subtotal)
+    waiver_fee = round(subtotal_after_discount * 0.08, 2) if damage_waiver_opt else 0
+    
+    # Tax (7%)
+    taxable_amount = subtotal_after_discount + waiver_fee + distance_charge
+    tax_total = round(taxable_amount * 0.07, 2) if not is_tax_exempt else 0
+    
+    # Grand Total
+    total_dollars = taxable_amount + tax_total + staff_fee
+    
+    # Deposit and Remaining
+    deposit = round(total_dollars * 0.35, 2)
+    remaining = round(total_dollars - deposit, 2)
+    
+    booking_id = str(uuid.uuid4())
+    
     delivery_address = data.get("address", {})
     time_slot = data.get("timeSlot", "")
     time_period = data.get("timePeriod", "")
+    
 
     total_dollars = sum(
         float(item.get("price", 0)) * int(item.get("quantity", 1))
@@ -174,6 +256,7 @@ def create_checkout(data: dict):
             "redirect_url": redirect_url,
             "ask_for_shipping_address": True,
             "pre_populate_shipping_address": delivery_address,
+            "enable_tipping": True,
         },
     }
 
@@ -195,9 +278,20 @@ def create_checkout(data: dict):
         "phone": customer_phone,
         "date": booking_date,
         "items": cart_items,
-        "total": total_dollars,
+        "pricing_breakdown": {
+            "subtotal": raw_subtotal,
+            "discount": discount_amount,
+            "waiver": waiver_fee,
+            "tax": tax_total,
+            "distance": distance_charge,
+            "staff": staff_fee,
+            "total": total_dollars,
+        }
         "deposit": deposit,
         "remaining": remaining,
+        "referralType": referral_type,
+        "isTaxExempt": is_tax_exempt,
+        "paymentStatus": "pending",
         "address": delivery_address,
         "timeSlot": time_slot,
         "timePeriod": time_period,
@@ -212,7 +306,7 @@ def create_checkout(data: dict):
 
     # Admin alert for checkout started (UPDATED)
     send_email_template(
-        to="admin@buzzys.org",
+        to=["buzzysentertainment@gmail.com", "kandy.stamey@gmail.com"],
         template_id=os.getenv("RESEND_ADMIN_CHECKOUT_STARTED_TEMPLATE"),
         data={
             "name": customer_name,

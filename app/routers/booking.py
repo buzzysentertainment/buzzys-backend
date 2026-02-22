@@ -171,8 +171,19 @@ def create_checkout(data: dict):
     distance_charge = float(data.get("distanceCharge", 0))
     staff_fee = float(data.get("staffFee", 0))
     
-    raw_subtotal = sum(float(item.get("price", 0)) for item in cart_items)
-    
+    # Calculate Subtotal & Check for Overnight Property
+    item_summary_list = []
+    raw_subtotal = 0
+    for item in cart_items:
+        price = float(item.get("price", 0))
+        raw_subtotal += price
+        
+        # Build title with Overnight tag if applicable 
+        title = item.get("title") or item.get("name", "Item")
+        if item.get("overnight") is True:
+            title += " (Overnight)"
+        item_summary_list.append(title)
+        
     # Referral Discounts
     discount_amount = 0
     if referral_type == "Friend":
@@ -197,10 +208,8 @@ def create_checkout(data: dict):
     address_input = data.get("address", "Address Not Provided")
     if isinstance(address_input, dict):
         delivery_address_display = f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}"
-        pre_populate_address = address_input
     else:
         delivery_address_display = address_input
-        pre_populate_address = {"address_line_1": address_input}
 
     time_slot = data.get("timeSlot", "")
     time_period = data.get("timePeriod", "")
@@ -233,7 +242,7 @@ def create_checkout(data: dict):
             "note": (
                 f"BookingID: {booking_id} | "
                 f"Customer: {customer_name} | "
-                f"Email: {customer_email} | "
+                f"Items: {', '.join(item_summary_list)} | "
                 f"Date: {booking_date} | "
                 f"Address: {delivery_address_display} | "
                 f"Total: ${total_dollars:.2f} | "
@@ -242,7 +251,7 @@ def create_checkout(data: dict):
         },
         "checkout_options": {
             "redirect_url": redirect_url,
-            "ask_for_shipping_address": False, # Set to False since we have the address
+            "ask_for_shipping_address": False,
             "enable_tipping": True,
         },
     }

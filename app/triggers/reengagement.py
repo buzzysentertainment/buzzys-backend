@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from app.firebase_config import db
+from app.services.firebase_setup import db
 from app.services.email_service import send_email_template
 
 def send_anniversary_reminders():

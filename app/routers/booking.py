@@ -67,26 +67,18 @@ def create_booking(booking: Booking):
     db.collection("bookings").document(booking_id).set(booking_data)
 
     send_email_template(
-        to=booking.email,
-        template_id=os.getenv("RESEND_BOOKING_CONFIRMATION_TEMPLATE"),
-        data={
-            "name": booking.name,
-            "date": booking.date,
-            "total": total,
-            "deposit": deposit,
-            "remaining": remaining
-        }
-    )
-
-    send_email_template(
-        to="admin@buzzys.org",
+        to="buzzysentertainment@gmail.com",
         template_id=os.getenv("RESEND_ADMIN_NEW_BOOKING_TEMPLATE"),
         data={
             "name": booking.name,
+            "email": booking.email,
+            "phone": booking.phone,
             "date": booking.date,
-            "total": total,
-            "deposit": deposit,
-            "remaining": remaining
+            "total": f"${total:.2f}",
+            "deposit": f"${deposit:.2f}",
+            "booking_id": booking_id,
+            "items": ", ".join([str(i) for i in booking.items]),
+            "remaining": f"${remaining:.2f}"
         }
     )
 

@@ -27,22 +27,22 @@ def generate_ics_content(booking_data):
     return "\n".join(ics_lines)
     
 def send_email_template(to, template_id: str, data: dict, attachments=None):
-    """
-    Updated logic to handle multiple recipients and calendar attachments.
-    """
     try:
-        # LOGIC 1: Ensure 'to' is always a list for Resend
+        # SAFETY CHECK: If 'to' is missing or the string "undefined", stop the crash
+        if not to or to == "undefined":
+            print(f"ABORTING EMAIL: Recipient 'to' is {to}. Cannot send to nobody.")
+            return {"status": "error", "message": "Missing recipient email"}
+
+        # Ensure 'to' is a list (Resend requirement)
         recipients = to if isinstance(to, list) else [to]
 
-        # Build the basic email parameters
         params = {
             "from": "Buzzy’s Inflatables <no-reply@buzzys.org>",
             "to": recipients,
             "template_id": template_id,
-            "data": data
+            "params": data  # Note: Resend Python SDK often uses 'params' for template data
         }
 
-        # LOGIC 2: Only add attachments to the request if they exist
         if attachments:
             params["attachments"] = attachments
 
@@ -50,6 +50,5 @@ def send_email_template(to, template_id: str, data: dict, attachments=None):
         return {"status": "success", "response": response}
 
     except Exception as e:
-        # LOGIC 3: Print the error to your Render terminal for debugging
         print(f"CRITICAL EMAIL ERROR: {str(e)}")
         return {"status": "error", "message": str(e)}

@@ -209,7 +209,7 @@ def create_checkout(data: dict):
         access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
         environment="production",
     )
-
+    save_card_requested = data.get("saveCardForAutopay", False)
     location_id = os.getenv("SQUARE_LOCATION_ID")
     redirect_url = "https://www.buzzys.org/booking-success"
 
@@ -264,7 +264,7 @@ def create_checkout(data: dict):
             "base_price_money": {"amount": int(pricing["deposit"] * 100), "currency": "USD"},
         },
         {
-            "name": f"Remaining Balance Due on Event Date (${pricing['remaining']:.2f})",
+            "name": f"Remaining Balance Due 2 Days Before Event Date (${pricing['remaining']:.2f})",
             "quantity": "1",
             "base_price_money": {"amount": 0, "currency": "USD"},
         },
@@ -290,9 +290,14 @@ def create_checkout(data: dict):
             "redirect_url": redirect_url,
             "ask_for_shipping_address": False,
             "enable_tipping": True,
-            "merchant_support_email": "buzzysentertainment@gmail.com"           
+            "merchant_support_email": "buzzysentertainment@gmail.com",
+            "allow_tipping": True,
+            "display_return_shipping_label": False
         },
     }
+    
+    if save_card_requested:
+        pass
 
     result = client.checkout.create_payment_link(body)
 
@@ -316,6 +321,7 @@ def create_checkout(data: dict):
         "pricing_breakdown": pricing,
         "deposit": pricing["deposit"],
         "remaining": pricing["remaining"],
+        "saveCardForAutopay": save_card_requested,
         "address": delivery_address_display,
         "timeSlot": time_slot,
         "timePeriod": time_period,
@@ -356,6 +362,10 @@ def automate_lifecycle():
     2. Reminders (Day of event)
     3. Reengagement (Day after event)
     """
+    cron_key = request.headers.get("X-Cron-Auth")
+    if cron_key != os.getenv("CRON_SECRET_KEY"):
+        raise HTTPException(status_code=403, detail="Unauthorized")
+        
     today_dt = datetime.utcnow()
     today_str = today_dt.strftime("%Y-%m-%d")
     target_date_autopay = (today_dt + timedelta(days=2)).strftime("%Y-%m-%d")
@@ -367,6 +377,7 @@ def automate_lifecycle():
     autopay_docs = db.collection("bookings")\
             .where("date", "==", target_date_autopay)\
             .where("paymentStatus", "==", "deposit_paid")\
+            .where("saveCardForAutopay", "==", True)\
             .stream()
     
     autopay_results = []

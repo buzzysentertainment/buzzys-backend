@@ -26,27 +26,41 @@ def generate_ics_content(booking_data):
     ]
     return "\n".join(ics_lines)
     
-def send_email_template(to, template_id: str, data: dict, attachments=None):
+def send_email_template(to, template_id=None, data=None, html_content=None, attachments=None):
     try:
-        # SAFETY CHECK: If 'to' is missing or the string "undefined", stop the crash
-        if not to or to == "undefined":
-            print(f"ABORTING EMAIL: Recipient 'to' is {to}. Cannot send to nobody.")
+        # FIX 1: Ensure 'to' is valid and not the string "undefined"
+        if not to or str(to).lower() == "undefined":
+            print(f"ABORTING EMAIL: Recipient 'to' is invalid ({to}).")
             return {"status": "error", "message": "Missing recipient email"}
 
-        # Ensure 'to' is a list (Resend requirement)
+        # Resend expects a list for the 'to' field
         recipients = to if isinstance(to, list) else [to]
+        
+        # Ensure data is a dictionary so we don't get "undefined"
+        data = data or {}
 
+        # FIX 2: Build the params correctly
         params = {
-            "from": "Buzzy’s Inflatables <no-reply@buzzys.org>",
+            "from": "Buzzy’s Inflatables <bookings@buzzys.org>", # Verified domain
             "to": recipients,
-            "template_id": template_id,
-            "params": data  # Note: Resend Python SDK often uses 'params' for template data
+            "subject": data.get("subject", "Your Booking with Buzzy’s!"),
         }
+
+        # FIX 3: Handle Template OR Manual HTML (to prevent those "undefined" logs)
+        if template_id:
+            params["template_id"] = template_id
+            params["params"] = data
+        elif html_content:
+            params["html"] = html_content
+        else:
+            # Fallback if both are missing
+            params["html"] = f"<p>Hi {data.get('name', 'Customer')}, thanks for booking!</p>"
 
         if attachments:
             params["attachments"] = attachments
 
         response = resend.Emails.send(params)
+        print(f"RESEND SUCCESS: Sent to {recipients}")
         return {"status": "success", "response": response}
 
     except Exception as e:

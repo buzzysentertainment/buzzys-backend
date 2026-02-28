@@ -45,6 +45,48 @@ class Booking(BaseModel):
 
 
 # -------------------------
+# CHECK AVAILABILITY (New Logic)
+# -------------------------
+@router.post("/check-availability")
+async def check_availability(data: dict):
+    """
+    Checks if specific items are already booked on a given date.
+    Yields a 'False' availability if any item title matches an active booking.
+    """
+    target_date = data.get("date")
+    requested_item_titles = data.get("items", []) # List of titles from React cart
+    
+    if not target_date:
+        raise HTTPException(status_code=400, detail="Date is required")
+
+    # Query Firestore for active bookings on that date
+    bookings_ref = db.collection("bookings")
+    query = bookings_ref.where("date", "==", target_date)\
+                        .where("status", "==", "active")\
+                        .stream()
+    
+    for doc in query:
+        existing_booking = doc.to_dict()
+        
+        # Skip checking if the payment failed
+        if existing_booking.get("paymentStatus") == "failed":
+            continue
+
+        existing_items = existing_booking.get("items", [])
+        
+        for item in existing_items:
+            # Match titles based on your display logic
+            existing_title = item.get("title") or item.get("name")
+            if existing_title in requested_item_titles:
+                return {
+                    "available": False, 
+                    "conflict": existing_title
+                }
+                
+    return {"available": True}
+
+
+# -------------------------
 # Create Booking
 # -------------------------
 @router.post("/")
@@ -96,22 +138,17 @@ def get_all_bookings():
     for doc in docs:
         b = doc.to_dict()
         
-        # 1. Fix Customer Name (Mapping Square 'customer_name' to 'name')
         if "customer_name" in b and not b.get("name"):
             b["name"] = b["customer_name"]
             
-        # 2. Fix Date (Mapping 'eventDate' to 'date')
         if "eventDate" in b and not b.get("date"):
             b["date"] = b["eventDate"]
 
-        # 3. Fix Total (Mapping pricing_breakdown nested total to top-level 'total')
         if "pricing_breakdown" in b and isinstance(b["pricing_breakdown"], dict):
             if not b.get("total"):
                 b["total"] = b["pricing_breakdown"].get("total", "$")
 
-        # 4. Clean up the Item list (Removes empty commas seen in your screenshot)
         if "items" in b and isinstance(b["items"], list):
-            # Extract titles if items are objects, then filter out empties
             item_names = []
             for item in b["items"]:
                 name = item.get("title") or item.get("name") or str(item)
@@ -123,47 +160,8 @@ def get_all_bookings():
 
         cleaned_bookings.append(b)
 
-    # Sort them by date created so the client sees newest first
     cleaned_bookings.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-    
     return cleaned_bookings
-
-# -------------------------
-# Send Reminder for a Single Booking
-# -------------------------
-@router.post("/{booking_id}/send-reminder")
-def send_reminder(booking_id: str):
-    doc_ref = db.collection("bookings").document(booking_id)
-    doc = doc_ref.get()
-
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Booking not found")
-
-    booking = doc.to_dict()
-    return send_event_day_reminder(booking)
-
-
-# -------------------------
-# Send Reminders for All Events Happening Today
-# -------------------------
-@router.post("/send-today-reminders")
-def send_today_reminders():
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-
-    docs = (
-        db.collection("bookings")
-        .where("date", "==", today)
-        .where("status", "==", "active")
-        .stream()
-    )
-
-    sent = []
-    for doc in docs:
-        booking = doc.to_dict()
-        send_event_day_reminder(booking)
-        sent.append(booking.get("booking_id"))
-
-    return {"status": "success", "reminders_sent": sent}
 
 
 # -------------------------
@@ -183,7 +181,6 @@ def create_checkout(data: dict):
     if not cart_items:
         raise HTTPException(status_code=400, detail="Cart is empty")
 
-    # Aligning frontend fields with backend logic
     customer_name = data.get("customerName") or data.get("name", "Valued Customer")
     customer_email = data.get("customerEmail") or data.get("email", "")
     customer_phone = data.get("customerPhone") or data.get("phone", "")
@@ -197,20 +194,17 @@ def create_checkout(data: dict):
     distance_charge = float(data.get("distanceCharge", 0))
     staff_fee = float(data.get("staffFee", 0))
     
-    # Calculate Subtotal & Check for Overnight Property
     item_summary_list = []
     raw_subtotal = 0
     for item in cart_items:
         price = float(item.get("price", 0))
         raw_subtotal += price
         
-        # Build title with Overnight tag if applicable 
         title = item.get("title") or item.get("name", "Item")
         if item.get("overnight") is True:
             title += " (Overnight)"
         item_summary_list.append(title)
         
-    # Referral Discounts
     discount_amount = 0
     if referral_type == "Friend":
         discount_amount = raw_subtotal * 0.05
@@ -230,7 +224,6 @@ def create_checkout(data: dict):
     
     booking_id = str(uuid.uuid4())
     
-    # ADDRESS SAFETY FIX: Check if it's a string (new cart) or dict (old cart)
     address_input = data.get("address", "Address Not Provided")
     if isinstance(address_input, dict):
         delivery_address_display = f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}"
@@ -343,73 +336,64 @@ def create_checkout(data: dict):
 
 
 # -------------------------
-# Update Booking
+# Remaining Utility Routes (Update, Reminder, Square Webhook)
 # -------------------------
 @router.put("/{booking_id}")
 def update_booking(booking_id: str, data: dict):
     doc_ref = db.collection("bookings").document(booking_id)
     doc = doc_ref.get()
-
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Booking not found")
-
     old_data = doc.to_dict()
     new_data = {**old_data, **data}
-
     doc_ref.update(new_data)
-
-    if (
-        old_data.get("contractStatus") != "received"
-        and new_data.get("contractStatus") == "received"
-    ):
+    if old_data.get("contractStatus") != "received" and new_data.get("contractStatus") == "received":
         handle_contract_received(new_data)
-
     if old_data.get("status") != "canceled" and new_data.get("status") == "canceled":
         handle_event_canceled(new_data)
-
     return {"status": "success", "updated": new_data}
 
+@router.post("/{booking_id}/send-reminder")
+def send_reminder(booking_id: str):
+    doc_ref = db.collection("bookings").document(booking_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    booking = doc.to_dict()
+    return send_event_day_reminder(booking)
 
-# -------------------------
-# Square Webhook
-# -------------------------
+@router.post("/send-today-reminders")
+def send_today_reminders():
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    docs = db.collection("bookings").where("date", "==", today).where("status", "==", "active").stream()
+    sent = []
+    for doc in docs:
+        booking = doc.to_dict()
+        send_event_day_reminder(booking)
+        sent.append(booking.get("booking_id"))
+    return {"status": "success", "reminders_sent": sent}
+
 @router.post("/webhooks/square")
 async def square_webhook(request: Request):
     square_signature = request.headers.get("x-square-hmacsha256-signature")
     webhook_signature_key = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY")
-
     raw_body = await request.body()
     body_text = raw_body.decode("utf-8")
-
     if webhook_signature_key:
-        computed_hash = hmac.new(
-            webhook_signature_key.encode("utf-8"),
-            msg=body_text.encode("utf-8"),
-            digestmod=hashlib.sha256,
-        ).digest()
+        computed_hash = hmac.new(webhook_signature_key.encode("utf-8"), msg=body_text.encode("utf-8"), digestmod=hashlib.sha256).digest()
         computed_signature = base64.b64encode(computed_hash).decode("utf-8")
-
         if computed_signature != square_signature:
             raise HTTPException(status_code=400, detail="Invalid signature")
-
     payload = await request.json()
     event_type = payload.get("type", "")
     data_object = payload.get("data", {}).get("object", {})
-
     print("SQUARE WEBHOOK RECEIVED:", event_type)
-
     if event_type == "payment.updated":
         payment = data_object.get("payment", {})
         status = payment.get("status")
-        
-        client = Client(
-            access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
-            environment="production",
-        )
-
+        client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
         order_id = payment.get("order_id")
         booking_id = None
-
         if order_id:
             try:
                 order_result = client.orders.retrieve_order(order_id=order_id)
@@ -421,57 +405,36 @@ async def square_webhook(request: Request):
                         booking_id = part.split("|")[0].strip()
             except Exception as e:
                 print("FAILED TO RETRIEVE ORDER:", e)
-
-        if not booking_id:
-            return {"status": "ignored"}
-
+        if not booking_id: return {"status": "ignored"}
         doc_ref = db.collection("bookings").document(booking_id)
         doc = doc_ref.get()
-        if not doc.exists:
-            return {"status": "ignored"}
-
+        if not doc.exists: return {"status": "ignored"}
         booking = doc.to_dict()
-
         if status == "COMPLETED" and booking.get("paymentStatus") != "deposit_paid":
             doc_ref.update({"paymentStatus": "deposit_paid"})
             booking["paymentStatus"] = "deposit_paid"
             handle_deposit_received(booking)
-
         elif status in ("FAILED", "CANCELED"):
             doc_ref.update({"paymentStatus": "failed"})
             booking["paymentStatus"] = "failed"
             handle_payment_declined(booking)
-
     if event_type == "invoice.updated":
         invoice = data_object.get("invoice", {})
         status = invoice.get("status")
         invoice_id = invoice.get("id")
-
-        query = (
-            db.collection("bookings")
-            .where("invoice_id", "==", invoice_id)
-            .limit(1)
-            .stream()
-        )
-
+        query = db.collection("bookings").where("invoice_id", "==", invoice_id).limit(1).stream()
         booking_doc = None
         for d in query:
             booking_doc = d
             break
-
-        if not booking_doc:
-            return {"status": "ignored"}
-
+        if not booking_doc: return {"status": "ignored"}
         booking = booking_doc.to_dict()
         doc_ref = db.collection("bookings").document(booking["booking_id"])
-
         if status == "PAID":
             doc_ref.update({"paymentStatus": "balance_paid"})
             booking["paymentStatus"] = "balance_paid"
             handle_balance_paid(booking)
-
         if status in ("CANCELED", "REFUNDED"):
             remaining = float(booking.get("remaining", 0))
             handle_refund_issued(booking, amount=remaining)
-
     return {"status": "ok"}

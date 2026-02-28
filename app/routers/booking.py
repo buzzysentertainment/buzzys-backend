@@ -18,7 +18,7 @@ from app.triggers.on_balance_paid import handle_balance_paid
 from app.triggers.on_refund_issued import handle_refund_issued
 from app.triggers.on_event_canceled import handle_event_canceled
 from app.triggers.on_event_reminder import handle_event_reminder
-from app.triggers.on_reengagement import handle_reengagement # <--- Added New
+from app.triggers.on_reengagement import send_anniversary_reminders # <--- Added New
 
 router = APIRouter(prefix="/book", tags=["booking"])
 

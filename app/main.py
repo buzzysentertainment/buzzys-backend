@@ -1,3 +1,4 @@
+from app.routes import tasks
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -49,6 +50,8 @@ app.add_middleware(
 app.include_router(email_test.router)
 app.include_router(booking.router)
 app.include_router(admin.router)
+app.include_router(tasks.router)
+
 
 # Settings (ALL admin settings panels)
 app.include_router(theme.router, prefix="/admin", tags=["Theme"])

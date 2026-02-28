@@ -99,8 +99,42 @@ def create_booking(booking: Booking):
 @router.get("/all")
 def get_all_bookings():
     docs = db.collection("bookings").stream()
-    return [doc.to_dict() for doc in docs]
+    cleaned_bookings = []
 
+    for doc in docs:
+        b = doc.to_dict()
+        
+        # 1. Fix Customer Name (Mapping Square 'customer_name' to 'name')
+        if "customer_name" in b and not b.get("name"):
+            b["name"] = b["customer_name"]
+            
+        # 2. Fix Date (Mapping 'eventDate' to 'date')
+        if "eventDate" in b and not b.get("date"):
+            b["date"] = b["eventDate"]
+
+        # 3. Fix Total (Mapping pricing_breakdown nested total to top-level 'total')
+        if "pricing_breakdown" in b and isinstance(b["pricing_breakdown"], dict):
+            if not b.get("total"):
+                b["total"] = b["pricing_breakdown"].get("total", "$")
+
+        # 4. Clean up the Item list (Removes empty commas seen in your screenshot)
+        if "items" in b and isinstance(b["items"], list):
+            # Extract titles if items are objects, then filter out empties
+            item_names = []
+            for item in b["items"]:
+                name = item.get("title") or item.get("name") or str(item)
+                if name:
+                    item_names.append(name)
+            b["display_items"] = ", ".join(item_names)
+        else:
+            b["display_items"] = "No items listed"
+
+        cleaned_bookings.append(b)
+
+    # Sort them by date created so the client sees newest first
+    cleaned_bookings.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    
+    return cleaned_bookings
 
 # -------------------------
 # Send Reminder for a Single Booking

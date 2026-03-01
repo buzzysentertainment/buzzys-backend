@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from app.services.email_service import send_email_template
 from app.services.firebase_setup import db
 from square.client import Client
+from square.utilities.webhooks_helper import is_valid_webhook_event_signature
 from datetime import datetime, timedelta
 import os
 import uuid
@@ -443,67 +444,44 @@ def automate_lifecycle():
 # UPDATE & INDIVIDUAL ACTIONS
 # ---------------------------------------------------------
 
-@router.put("/{booking_id}")
-def update_booking(booking_id: str, data: dict):
-    """
-    Update a booking record and trigger status-change workflows.
-    """
-    doc_ref = db.collection("bookings").document(booking_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    
-    old_data = doc.to_dict()
-    new_data = {**old_data, **data}
-    doc_ref.update(new_data)
-    
-    # Trigger: Contract Received
-    if old_data.get("contractStatus") != "received" and new_data.get("contractStatus") == "received":
-        handle_contract_received(new_data)
-    
-    # Trigger: Event Canceled
-    if old_data.get("status") != "canceled" and new_data.get("status") == "canceled":
-        handle_event_canceled(new_data)
-        
-    return {"status": "success", "updated": new_data}
-
-@router.post("/{booking_id}/send-reminder")
-def send_individual_reminder(booking_id: str):
-    """
-    Manually trigger an event reminder email for a specific booking.
-    """
-    doc_ref = db.collection("bookings").document(booking_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Booking not found")
-    return send_event_day_reminder(doc.to_dict())
-
-# ---------------------------------------------------------
-# WEBHOOKS
-# ---------------------------------------------------------
-
 @router.post("/webhooks/square")
 async def square_webhook(request: Request):
     """
     Square Webhook Listener for Payments and Invoices.
     """
-    # 1. Signature Verification
+    # 1. OFFICIAL SIGNATURE VERIFICATION
+    # Get the signature from Square's header
     square_signature = request.headers.get("x-square-hmacsha256-signature")
+    
+    # Get your secret key from Render Environment Variables
     webhook_signature_key = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY")
+    
+    # IMPORTANT: This must match your Square Developer Dashboard URL exactly
+    notification_url = "https://buzzys-backend.onrender.com/book/webhooks/square"
+    
+    # Get the raw body bytes for verification
     raw_body = await request.body()
     body_text = raw_body.decode("utf-8")
     
-    if webhook_signature_key and square_signature:
-        computed_hash = hmac.new(webhook_signature_key.encode("utf-8"), msg=body_text.encode("utf-8"), digestmod=hashlib.sha256).digest()
-        computed_signature = base64.b64encode(computed_hash).decode("utf-8")
-        if computed_signature != square_signature:
-            raise HTTPException(status_code=400, detail="Invalid signature")
+    # Use the official Square SDK utility (much more reliable than manual HMAC)
+    is_valid = is_valid_webhook_event_signature(
+        body_text,
+        square_signature,
+        webhook_signature_key,
+        notification_url
+    )
 
+    if not is_valid:
+        print("WEBHOOK ERROR: Signature Verification Failed. Check your URL or Secret Key.")
+        # If testing and desperate, you can temporarily 'pass' here, but keep it for production safety!
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    # 2. PARSE PAYLOAD
     payload = await request.json()
     event_type = payload.get("type", "")
     data_object = payload.get("data", {}).get("object", {})
     
-    # 2. Handle Payment Updates (Initial Deposit / Card Capture)
+    # 3. HANDLE PAYMENT UPDATES (Initial Deposit / Card Capture)
     if event_type == "payment.updated":
         payment = data_object.get("payment", {})
         status = payment.get("status")
@@ -533,20 +511,23 @@ async def square_webhook(request: Request):
             if doc.exists:
                 booking = doc.to_dict()
                 if status == "COMPLETED" and booking.get("paymentStatus") != "deposit_paid":
-                    # Crucial: Store SourceID for future Autopay
+                    # Store SourceID for future Autopay logic
                     doc_ref.update({
                         "paymentStatus": "deposit_paid",
                         "square_customer_id": customer_id,
                         "square_source_id": source_id
                     })                    
                     booking["paymentStatus"] = "deposit_paid"
+                    
+                    # THIS TRIGGERS THE NEWLY CORRECTED EMAIL TEMPLATE
                     handle_deposit_received(booking)
+                    
                 elif status in ("FAILED", "CANCELED"):
                     doc_ref.update({"paymentStatus": "failed"})
                     booking["paymentStatus"] = "failed"
                     handle_payment_declined(booking)
 
-    # 3. Handle Invoice Updates (Manual Balance Payments)
+    # 4. HANDLE INVOICE UPDATES (Manual Balance Payments)
     if event_type == "invoice.updated":
         invoice = data_object.get("invoice", {})
         status = invoice.get("status")

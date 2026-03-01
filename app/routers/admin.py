@@ -17,6 +17,15 @@ def get_all_bookings(user=Depends(verify_admin_token)):
     for doc in docs:
         data = doc.to_dict()
         data["id"] = doc.id
+        
+        # FIX: Normalize name and date so the Dashboard table isn't blank
+        data["name"] = data.get("name") or data.get("customer_name") or "Unknown"
+        data["date"] = data.get("date") or data.get("eventDate") or "TBD"
+        
+        # FIX: Pull total from the pricing breakdown map
+        pricing = data.get("pricing_breakdown", {})
+        data["total"] = pricing.get("total") or data.get("total") or 0
+        
         bookings.append(data)
 
     return {"bookings": bookings}
@@ -30,8 +39,17 @@ def get_booking(booking_id: str, user=Depends(verify_admin_token)):
     doc = db.collection("bookings").document(booking_id).get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Booking not found")
+    
     data = doc.to_dict()
     data["id"] = doc.id
+    
+    # Normalize for the popup modal
+    data["name"] = data.get("name") or data.get("customer_name") or "Unknown"
+    data["date"] = data.get("date") or data.get("eventDate") or "TBD"
+    
+    pricing = data.get("pricing_breakdown", {})
+    data["total"] = pricing.get("total") or data.get("total") or 0
+    
     return data
 
 
@@ -77,10 +95,10 @@ def delete_booking(booking_id: str, user=Depends(verify_admin_token)):
 # -------------------------
 @router.get("/bookings/date/{date}")
 def filter_by_date(date: str, user=Depends(verify_admin_token)):
-    # Firestore field is eventDate, not date
-    bookings_ref = db.collection("bookings").where("eventDate", "==", date)
+    # Field is now 'date' to match your Emily records
+    bookings_ref = db.collection("bookings").where("date", "==", date)
     docs = bookings_ref.stream()
-
+  
     bookings = []
     for doc in docs:
         data = doc.to_dict()
@@ -88,7 +106,6 @@ def filter_by_date(date: str, user=Depends(verify_admin_token)):
         bookings.append(data)
 
     return {"bookings": bookings}
-
 
 # -------------------------
 # FILTER BY ITEM
@@ -118,3 +135,38 @@ def filter_by_item(item: str, user=Depends(verify_admin_token)):
                     break
 
     return {"bookings": bookings}
+# -------------------------
+# CALENDAR EVENTS (grouped by date)
+# -------------------------
+@router.get("/calendar")
+def get_calendar_events(user=Depends(verify_admin_token)):
+    docs = db.collection("bookings").stream()
+    events_by_date = {}
+
+    for doc in docs:
+        data = doc.to_dict()
+        
+        # FIX: Check both "date" (new) and "eventDate" (old)
+        date = data.get("date") or data.get("eventDate")
+
+        if not date:
+            continue
+
+        if date not in events_by_date:
+            events_by_date[date] = []
+
+        # FIX: Pull total from pricing_breakdown map or top-level total
+        pricing = data.get("pricing_breakdown", {})
+        total_val = pricing.get("total") or data.get("total") or 0
+
+        events_by_date[date].append({
+            "id": doc.id,
+            "name": data.get("name") or data.get("customer_name") or "Unknown",
+            "email": data.get("email"),
+            "phone": data.get("phone"),
+            "items": data.get("items"),
+            "total": total_val,
+            "status": data.get("status"),
+        })
+
+    return {"events": events_by_date}

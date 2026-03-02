@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+google-cloud-firestore
+google-auth
+firebase-admin
+python-dotenv
+svix
+squareup
+requests
+python-dateutil
+

@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app.services.email_service import send_email_template
 from app.services.firebase_setup import db
+from svix.webhooks import Webhook, WebhookVerificationError
 from square.client import Client
 from square.utilities.webhooks_helper import is_valid_webhook_event_signature
 from datetime import datetime, timedelta
@@ -142,6 +143,7 @@ def create_booking(booking: Booking):
     booking_data["status"] = "active"
 
     db.collection("bookings").document(booking_id).set(booking_data)
+    
 
     # Admin Notification
     send_email_template(
@@ -550,4 +552,55 @@ async def square_webhook(request: Request):
                 remaining = float(booking.get("remaining", 0))
                 handle_refund_issued(booking, amount=remaining)
     
+    return {"status": "ok"}
+@router.post("/webhooks/resend")
+async def resend_webhook(request: Request):
+    """
+    Resend Webhook Listener: Updates Buzzy/Firebase when 
+    email status changes (Delivered, Bounced, etc.)
+    """
+    # 1. Verify Signature
+    secret = os.getenv("RESEND_WEBHOOK_SECRET")
+    if not secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+
+    headers = request.headers
+    payload = await request.body()
+    
+    wh = Webhook(secret)
+    try:
+        # This ensures the ping actually came from Resend
+        evt = wh.verify(payload, headers)
+    except WebhookVerificationError:
+        print("RESEND WEBHOOK ERROR: Invalid Signature")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    # 2. Extract Data
+    event_type = evt.get("type")
+    data = evt.get("data", {})
+    email_id = data.get("email_id")
+    to_email = data.get("to")[0] if data.get("to") else "Unknown"
+
+    print(f"RESEND EVENT: {event_type} for {to_email} (ID: {email_id})")
+
+    # 3. Update Firebase / Buzzy
+    # We find the booking where the last email sent matches this ID
+    bookings_ref = db.collection("bookings")
+    query = bookings_ref.where("last_email_id", "==", email_id).limit(1).stream()
+    
+    booking_doc = None
+    for d in query:
+        booking_doc = d
+        break
+
+    if booking_doc:
+        doc_ref = bookings_ref.document(booking_doc.id)
+        
+        if event_type == "email.delivered":
+            doc_ref.update({"emailStatus": "Delivered ✅"})
+        elif event_type == "email.bounced":
+            doc_ref.update({"emailStatus": "Bounced ❌", "status": "action_required"})
+        elif event_type == "email.complained":
+            doc_ref.update({"emailStatus": "Marked as Spam ⚠️"})
+            
     return {"status": "ok"}

@@ -11,3 +11,4 @@ python-multipart>=0.0.5
 passlib[bcrypt]
 bcrypt
 squareup==36.0.0.20240417
+svix

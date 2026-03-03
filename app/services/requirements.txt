@@ -9,4 +9,5 @@ svix
 squareup
 requests
 python-dateutil
+google-api-python-client
 

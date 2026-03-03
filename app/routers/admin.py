@@ -28,7 +28,29 @@ def get_all_bookings(user=Depends(verify_admin_token)):
         data["items"] = data.get("items") or []
         data["deposit"] = pricing.get("deposit") or data.get("deposit") or 0
         data["remaining"] = pricing.get("remaining") or data.get("remaining") or 0
+        data["deliveryTime"] = data.get("deliveryTime") or "TBD"
+        data["partyDate"] = data.get("date") or data.get("eventDate") or "TBD"
+        data["pickupTime"] = data.get("pickupTime") or "TBD"
         
+        items = data.get("items") or []
+        item_names = []
+        wet_dry = []
+        overnight = False
+        
+        for item in items:
+            title = item.get("title") or item.get("name") or "Unknown Item"
+            item_names.append(title)
+            
+            mode = item.get("mode")
+            if mode:
+                wet_dry.append(mode)
+                
+            if item.get("overnight") is True:
+                overnight = True
+                
+        data["itemNames"] = ", ".join(item_names)      
+        data["wetDry"] = ", ".join(wet_dry) if wet_dry else "N/A"
+        data["overnight"] = "Yes" if overnight else "No"
         
         bookings.append(data)
 

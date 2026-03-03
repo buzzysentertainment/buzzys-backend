@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from app.services.google_calendar import create_booking_event, update_booking_event
 from app.services.email_service import send_email_template
 from app.services.firebase_setup import db
 from svix.webhooks import Webhook, WebhookVerificationError
@@ -143,6 +144,16 @@ def create_booking(booking: Booking):
     booking_data["status"] = "active"
 
     db.collection("bookings").document(booking_id).set(booking_data)
+    
+    # Create Google Calendar Event
+    try:
+        event_id = create_booking_event(booking_data)
+        db.collection("bookings").document(booking_id).update({
+            "google_event_id": event_id
+        })
+    except Exception as e:
+        print("GOOGLE CALENDAR ERROR:", e)
+
     
 
     # Admin Notification
@@ -519,7 +530,16 @@ async def square_webhook(request: Request):
                         "square_customer_id": customer_id,
                         "square_source_id": source_id
                     })                    
+                    
                     booking["paymentStatus"] = "deposit_paid"
+                    
+                    try:
+                        if booking.get("google_event_id"):
+                            update_booking_event(booking["google_event_id"], booking)
+                    except Exception as e:
+                        print("GOOGLE CALENDAR UPDATE ERROR:", e)
+                        
+                    
                     
                     # THIS TRIGGERS THE NEWLY CORRECTED EMAIL TEMPLATE
                     handle_deposit_received(booking)

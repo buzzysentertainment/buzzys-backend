@@ -21,10 +21,10 @@ def get_all_bookings(user=Depends(verify_admin_token)):
         # FIX: Normalize name and date so the Dashboard table isn't blank
         data["name"] = data.get("name") or data.get("customer_name") or "Unknown"
         data["date"] = data.get("date") or data.get("eventDate") or "TBD"
-        
-        # FIX: Pull total from the pricing breakdown map
-        pricing = data.get("pricing_breakdown", {})
         data["total"] = pricing.get("total") or data.get("total") or 0
+        data["status"] = data.get("status") or "Pending" 
+        data["items"] = data.get("items") or []
+        
         
         bookings.append(data)
 
@@ -43,13 +43,20 @@ def get_booking(booking_id: str, user=Depends(verify_admin_token)):
     data = doc.to_dict()
     data["id"] = doc.id
     
-    # Normalize for the popup modal
-    data["name"] = data.get("name") or data.get("customer_name") or "Unknown"
-    data["date"] = data.get("date") or data.get("eventDate") or "TBD"
-    
-    pricing = data.get("pricing_breakdown", {})
+    data["phone"] = data.get("phone") or ""
+    data["address"] = data.get("address") or data.get("location") or "Not provided" 
+    data["date"] = data.get("date") or data.get("eventDate") or "TBD" 
+    data["deliveryTime"] = data.get("deliveryTime") or "TBD" 
+    data["pickupTime"] = data.get("pickupTime") or "TBD" 
+    pricing = data.get("pricing_breakdown", {}) 
     data["total"] = pricing.get("total") or data.get("total") or 0
-    
+    data["deposit"] = pricing.get("deposit") or data.get("deposit") or 0 
+    data["remaining"] = pricing.get("remaining") or data.get("remaining") or 0 
+    data["items"] = data.get("items") or []
+    data["adminNote"] = data.get("adminNote") or "" 
+    data["status"] = data.get("status") or "Pending" 
+    data["history"] = data.get("history", [])
+
     return data
 
 
@@ -95,7 +102,6 @@ def delete_booking(booking_id: str, user=Depends(verify_admin_token)):
 # -------------------------
 @router.get("/bookings/date/{date}")
 def filter_by_date(date: str, user=Depends(verify_admin_token)):
-    # Field is now 'date' to match your Emily records
     bookings_ref = db.collection("bookings").where("date", "==", date)
     docs = bookings_ref.stream()
   
@@ -135,6 +141,24 @@ def filter_by_item(item: str, user=Depends(verify_admin_token)):
                     break
 
     return {"bookings": bookings}
+    
+    
+@router.patch("/bookings/{booking_id}")
+def patch_booking(booking_id: str, updates: dict, user=Depends(verify_admin_token)):
+    doc_ref = db.collection("bookings").document(booking_id)
+    doc_ref.update(updates)
+
+    # Optional: append to history
+    doc_ref.update({
+        "history": firestore.ArrayUnion([{
+            "type": "update",
+            "changes": updates,
+            "timestamp": firestore.SERVER_TIMESTAMP
+        }])
+    })
+
+    return {"message": "Booking updated"}
+    
 # -------------------------
 # CALENDAR EVENTS (grouped by date)
 # -------------------------

@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth import verify_admin_token
 from app.services.firebase_setup import db
+from google.cloud import firestore
+
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -18,12 +20,14 @@ def get_all_bookings(user=Depends(verify_admin_token)):
         data = doc.to_dict()
         data["id"] = doc.id
         
-        # FIX: Normalize name and date so the Dashboard table isn't blank
+        pricing = data.get("pricing_breakdown") or {}
         data["name"] = data.get("name") or data.get("customer_name") or "Unknown"
         data["date"] = data.get("date") or data.get("eventDate") or "TBD"
         data["total"] = pricing.get("total") or data.get("total") or 0
         data["status"] = data.get("status") or "Pending" 
         data["items"] = data.get("items") or []
+        data["deposit"] = pricing.get("deposit") or data.get("deposit") or 0
+        data["remaining"] = pricing.get("remaining") or data.get("remaining") or 0
         
         
         bookings.append(data)

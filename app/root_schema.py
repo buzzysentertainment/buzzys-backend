@@ -132,7 +132,7 @@ ROOT = {
         "square": {
             "checkout_url": {
                 "type": "string",
-                "required": True,
+                "required": false,
                 "aliases": [
                     "checkoutUrl", "paymentLink", "squareCheckoutUrl",
                     "checkout_url"
@@ -172,7 +172,7 @@ ROOT = {
         "status": {
             "status": {
                 "type": "string",
-                "required": True,
+                "required": false,
                 "aliases": [
                     "bookingStatus", "state", "reservationStatus", "status"
                 ],

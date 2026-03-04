@@ -258,7 +258,32 @@ ROOT = {
 }
 
 # ---------------------------------------------------------
-# FUNCTION: normalize_payload
+# Normalization helper
+# ---------------------------------------------------------
+
+def apply_normalization_rules(field: str, value):
+    if value is None:
+        return None
+
+    rules = ROOT.get("normalization", {})
+
+    if field == "date":
+        v = str(value).replace("/", "-")
+        if "T" in v:
+            v = v.split("T")[0]
+        return v
+
+    if field == "phone":
+        return re.sub(r"[^\d]", "", str(value))
+
+    if field == "name":
+        v = str(value).strip()
+        return " ".join(w.capitalize() for w in v.split())
+
+    return value
+
+# ---------------------------------------------------------
+# normalize_payload
 # ---------------------------------------------------------
 
 def normalize_payload(data: dict) -> dict:
@@ -266,18 +291,17 @@ def normalize_payload(data: dict) -> dict:
 
     for group, fields in ROOT["canonical"].items():
         for field, rules in fields.items():
+            found = None
             for alias in rules["aliases"]:
                 if alias in data:
-                    canonical[field] = data[alias]
+                    found = data[alias]
                     break
-
-            if field not in canonical:
-                canonical[field] = None
+            canonical[field] = apply_normalization_rules(field, found)
 
     return canonical
 
 # ---------------------------------------------------------
-# FUNCTION: validate_payload
+# validate_payload
 # ---------------------------------------------------------
 
 def validate_payload(canonical: dict):
@@ -291,7 +315,7 @@ def validate_payload(canonical: dict):
     return (len(missing) == 0, missing)
 
 # ---------------------------------------------------------
-# FUNCTION: build_square_metadata
+# build_square_metadata
 # ---------------------------------------------------------
 
 def build_square_metadata(canonical: dict) -> dict:
@@ -299,9 +323,43 @@ def build_square_metadata(canonical: dict) -> dict:
     return {meta_key: canonical.get(canonical_key) for meta_key, canonical_key in mapping.items()}
 
 # ---------------------------------------------------------
-# FUNCTION: build_resend_params
+# build_resend_params
 # ---------------------------------------------------------
 
 def build_resend_params(canonical: dict, template_key: str) -> dict:
     fields = ROOT["outbound"]["resend"].get(template_key, [])
     return {field: canonical.get(field) for field in fields}
+
+# ---------------------------------------------------------
+# build_calendar_payload
+# ---------------------------------------------------------
+
+def build_calendar_payload(canonical: dict) -> dict:
+    mapping = ROOT["outbound"]["calendar"]
+
+    def resolve(expr: str):
+        if "+ " in expr:
+            left, right = expr.split("+")
+            left = left.strip()
+            right = right.strip()
+            base = canonical.get(left)
+            extra = canonical.get(right)
+            if base and extra:
+                return f"{base}T{extra}"
+            return base or extra
+        return canonical.get(expr)
+
+    return {
+        "summary": mapping["summary"].format(**canonical),
+        "description": mapping["description"].format(**canonical),
+        "location": canonical.get(mapping["location"]),
+        "start": resolve(mapping["start"]),
+        "end": resolve(mapping["end"]),
+    }
+
+# ---------------------------------------------------------
+# build_firestore_doc (placeholder)
+# ---------------------------------------------------------
+
+def build_firestore_doc(canonical: dict) -> dict:
+    return canonical

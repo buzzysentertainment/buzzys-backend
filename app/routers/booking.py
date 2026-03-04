@@ -235,6 +235,9 @@ def create_checkout(data: dict):
     customer_email = data.get("customerEmail") or data.get("email", "")
     customer_phone = data.get("customerPhone") or data.get("phone", "")
     booking_date = data.get("eventDate") or data.get("date", "")
+    delivery_time = data.get("deliveryTime", "")
+    pickup_time = data.get("pickupTime", "")
+    overnight = data.get("overnight", False)
     
     referral_type = data.get("referralType", "None") 
     is_tax_exempt = data.get("isTaxExempt", False)
@@ -243,6 +246,7 @@ def create_checkout(data: dict):
     
     distance_charge = float(data.get("distanceCharge", 0))
     staff_fee = float(data.get("staffFee", 0))
+    
     
     # Process Item Titles and Subtotal
     item_summary_list = []
@@ -328,6 +332,9 @@ def create_checkout(data: dict):
         "email": customer_email,
         "phone": customer_phone,
         "date": booking_date,
+        "deliveryTime": delivery_time,
+        "pickupTime": pickup_time,
+        "overnight": overnight,
         "items": cart_items,
         "signature": signature,
         "damageWaiver": damage_waiver_opt,
@@ -337,8 +344,6 @@ def create_checkout(data: dict):
         "remaining": pricing["remaining"],
         "saveCardForAutopay": save_card_requested,
         "address": delivery_address_display,
-        "timeSlot": time_slot,
-        "timePeriod": time_period,
         "checkout_url": checkout_url,
         "created_at": datetime.utcnow().isoformat(),
         "paymentStatus": "pending",

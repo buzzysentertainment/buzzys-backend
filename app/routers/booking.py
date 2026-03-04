@@ -266,14 +266,12 @@ def create_checkout(data: dict):
     )
     
     booking_id = str(uuid.uuid4())
-    address_input = data.get("address", "Address Not Provided")
-    delivery_address_display = (
-        f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}" 
-        if isinstance(address_input, dict) else address_input
-    )
-
-    time_slot = data.get("timeSlot", "")
-    time_period = data.get("timePeriod", "")
+    address_input = data.get("address") or {}
+    
+    if isinstance(address_input, dict):
+        delivery_address_display = f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}"
+    else: 
+        delivery_address_display = str(address_input)
 
     line_items = [
         {

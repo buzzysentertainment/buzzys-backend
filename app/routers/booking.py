@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from app.root_schema import normalize_payload, validate_payload, build_square_metadata, build_resend_params
 from app.services.google_calendar import create_booking_event, update_booking_event
 from app.services.email_service import send_email_template
 from app.services.firebase_setup import db
@@ -95,9 +96,22 @@ async def check_availability(data: dict):
     """
     Checks if specific items are already booked for a given date.
     """
-    target_date = data.get("date")
-    requested_item_titles = data.get("items", []) 
+    canonical = normalize_payload(data)
+    is_valid, missing = validate_payload(canonical)
+    if not is_valid:
+        print("ROOT VALIDATION WARNING (check-availability):", missing)
     
+    target_date = (
+        data.get("date")
+        or data.get("eventDate")
+        or canonical.get("date")
+    )
+    requested_item_titles = (
+        data.get("items")
+        or canonical.get("items")
+        or []
+    )    
+
     if not target_date:
         raise HTTPException(status_code=400, detail="Date is required")
 
@@ -216,6 +230,12 @@ def get_all_bookings():
 
 @router.post("/create-checkout")
 def create_checkout(data: dict):
+    
+    
+    canonical = normalize_payload(data)
+    is_valid, missing = validate_payload(canonical)
+    if not is_valid:
+        print("ROOT VALIDATION WARNING — Missing:", missing)
     """
     Generates a Square Payment Link and prepares the finalized booking record.
     """
@@ -230,15 +250,46 @@ def create_checkout(data: dict):
     cart_items = data.get("cart", [])
     if not cart_items:
         raise HTTPException(status_code=400, detail="Cart is empty")
-
-    customer_name = data.get("customerName") or data.get("name", "Valued Customer")
-    customer_email = data.get("customerEmail") or data.get("email", "")
-    customer_phone = data.get("customerPhone") or data.get("phone", "")
-    booking_date = data.get("eventDate") or data.get("date", "")
-    delivery_time = data.get("deliveryTime", "")
-    pickup_time = data.get("pickupTime", "")
-    overnight = data.get("overnight", False)
-    
+    customer_name = (
+        data.get("customerName")
+        or data.get("name")
+        or canonical.get("name")
+        or "Valued Customer"
+    )
+    customer_email = (
+        data.get("customerEmail")
+        or data.get("email")
+        or canonical.get("email")
+        or ""
+    )
+    customer_phone = (
+        data.get("customerPhone")
+        or data.get("phone")
+        or canonical.get("phone")
+        or ""
+    )
+    booking_date = (
+        data.get("eventDate")
+        or data.get("date")
+        or canonical.get("date")
+        or ""
+    )
+    delivery_time = (
+        data.get("deliveryTime")
+        or canonical.get("deliveryTime")
+        or ""
+    )
+    pickup_time = (
+        data.get("pickupTime")
+        or canonical.get("pickupTime")
+        or ""
+    )    
+    overnight = (
+        data.get("overnight")
+        if "overnight" in data
+        else canonical.get("overnight", False)
+    )
+      
     referral_type = data.get("referralType", "None") 
     is_tax_exempt = data.get("isTaxExempt", False)
     damage_waiver_opt = data.get("damageWaiver", False)
@@ -285,6 +336,15 @@ def create_checkout(data: dict):
             "base_price_money": {"amount": 0, "currency": "USD"},
         },
     ]
+    
+    for item in cart_items:
+        item_title = item.get("title") or item.get("name") or "Rental Item"
+        line_items.append({
+            "name": item_title,
+            "quantity": "1",
+            "base_price_money": {"amount": 0, "currency": "USD"},
+        })    
+        
 
     body = {
         "idempotency_key": str(uuid.uuid4()),
@@ -292,6 +352,7 @@ def create_checkout(data: dict):
             "idempotency_key": str(uuid.uuid4()),
             "location_id": location_id,
             "line_items": line_items,
+            "metadata": build_square_metadata(canonical),
             "note": (
                 f"BookingID: {booking_id} | "
                 f"Customer: {customer_name} | "
@@ -350,19 +411,24 @@ def create_checkout(data: dict):
     }
 
     db.collection("bookings").document(booking_id).set(booking_record)
+    
+    email_data = build_resend_params(canonical, "admin_checkout_started")
+    email_data.setdefault("name", customer_name)
+    email_data.setdefault("email", customer_email)
+    email_data.setdefault("phone", customer_phone)
+    email_data.setdefault("date", booking_date)
+    email_data.setdefault("subtotal", pricing["subtotal"]) 
+    email_data.setdefault("deposit", pricing["deposit"]) 
+    email_data.setdefault("remaining", pricing["remaining"])
+    email_data.setdefault("waiverFee", pricing.get("waiver", 0))
+    email_data.setdefault("checkout_url", checkout_url)
+    email_data.setdefault("items", ", ".join(item_summary_list))
 
     # Admin Email Alert
     send_email_template(
         to=["buzzysentertainment@gmail.com", "kandy.stamey@gmail.com"],
         template_id=os.getenv("RESEND_ADMIN_CHECKOUT_STARTED_TEMPLATE"),
-        data={
-            "name": customer_name,
-            "date": booking_date,
-            "total": pricing["total"],
-            "deposit": pricing["deposit"],
-            "remaining": pricing["remaining"],
-            "checkout_url": checkout_url
-        }
+        data=email_data,
     )
 
     return {"checkoutUrl": checkout_url}
@@ -372,7 +438,7 @@ def create_checkout(data: dict):
 # ---------------------------------------------------------
 
 @router.post("/automate-lifecycle")
-def automate_lifecycle():
+def automate_lifecycle(request: Request):
     """
     Automated processing for:
     1. Autopay (2 days before event)

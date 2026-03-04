@@ -1,0 +1,249 @@
+ROOT = {
+    "canonical": {
+        "customer": {
+            "name": {
+                "type": "string",
+                "required": True,
+                "aliases": [
+                    "customerName", "fullName", "name", "customer_name",
+                    "buyer_name", "clientName"
+                ],
+                "description": "Full name of the customer placing the booking."
+            },
+            "email": {
+                "type": "string",
+                "required": True,
+                "aliases": [
+                    "customerEmail", "emailAddress", "email", "buyer_email",
+                    "contactEmail"
+                ],
+                "description": "Customer email used for receipts and confirmations."
+            },
+            "phone": {
+                "type": "string",
+                "required": True,
+                "aliases": [
+                    "phoneNumber", "customerPhone", "contactPhone", "phone"
+                ],
+                "description": "Customer phone number for delivery coordination."
+            },
+            "address": {
+                "type": "string",
+                "required": True,
+                "aliases": [
+                    "deliveryAddress", "eventAddress", "address", "location",
+                    "streetAddress"
+                ],
+                "description": "Delivery address for the event."
+            }
+        },
+
+        "event": {
+            "date": {
+                "type": "string (YYYY-MM-DD)",
+                "required": True,
+                "aliases": [
+                    "eventDate", "bookingDate", "selectedDate", "date",
+                    "partyDate", "reservationDate"
+                ],
+                "description": "The date of the event."
+            },
+            "deliveryTime": {
+                "type": "string",
+                "required": False,
+                "aliases": [
+                    "dropoffTime", "startTime", "delivery_time", "delivery",
+                    "setupTime"
+                ],
+                "description": "Time equipment should be delivered/set up."
+            },
+            "pickupTime": {
+                "type": "string",
+                "required": False,
+                "aliases": [
+                    "pickup_time", "endTime", "tearDownTime", "pickup"
+                ],
+                "description": "Time equipment should be picked up."
+            },
+            "overnight": {
+                "type": "boolean",
+                "required": False,
+                "aliases": [
+                    "overnightRental", "overnightStay", "overnight_flag",
+                    "isOvernight"
+                ],
+                "description": "Whether the rental is kept overnight."
+            }
+        },
+
+        "cart": {
+            "items": {
+                "type": "list",
+                "required": True,
+                "aliases": [
+                    "cart", "cartItems", "selectedItems", "items",
+                    "bookingItems", "orderItems"
+                ],
+                "description": "List of items the customer is booking."
+            },
+            "subtotal": {
+                "type": "number",
+                "required": True,
+                "aliases": [
+                    "totalBeforeDeposit", "baseTotal", "subtotal", "preDepositTotal"
+                ],
+                "description": "Total cost before deposit and fees."
+            },
+            "deposit": {
+                "type": "number",
+                "required": True,
+                "aliases": [
+                    "downPayment", "initialPayment", "depositAmount", "deposit"
+                ],
+                "description": "Deposit amount required to reserve the booking."
+            },
+            "remaining": {
+                "type": "number",
+                "required": True,
+                "aliases": [
+                    "remainingBalance", "balanceDue", "dueAtDelivery", "remaining"
+                ],
+                "description": "Remaining balance after deposit."
+            },
+            "waiverFee": {
+                "type": "number",
+                "required": False,
+                "aliases": [
+                    "damageWaiver", "insuranceFee", "waiver_fee", "waiverFee"
+                ],
+                "description": "Optional damage waiver fee."
+            }
+        },
+
+        "square": {
+            "checkout_url": {
+                "type": "string",
+                "required": True,
+                "aliases": [
+                    "checkoutUrl", "paymentLink", "squareCheckoutUrl",
+                    "checkout_url"
+                ],
+                "description": "Square checkout link for deposit payment."
+            },
+            "transaction_id": {
+                "type": "string",
+                "required": False,
+                "aliases": [
+                    "transactionId", "squareTransactionId", "paymentId",
+                    "txn_id"
+                ],
+                "description": "Square transaction ID returned after payment."
+            },
+            "order_id": {
+                "type": "string",
+                "required": False,
+                "aliases": [
+                    "orderId", "squareOrderId", "sq_order_id"
+                ],
+                "description": "Square order ID associated with the checkout."
+            }
+        },
+
+        "calendar": {
+            "event_id": {
+                "type": "string",
+                "required": False,
+                "aliases": [
+                    "googleEventId", "calendarEventId", "eventId"
+                ],
+                "description": "Google Calendar event ID created for the booking."
+            }
+        },
+
+        "status": {
+            "status": {
+                "type": "string",
+                "required": True,
+                "aliases": [
+                    "bookingStatus", "state", "reservationStatus", "status"
+                ],
+                "description": "Current status of the booking."
+            },
+            "note": {
+                "type": "string",
+                "required": False,
+                "aliases": [
+                    "adminNote", "internalNote", "note", "comments"
+                ],
+                "description": "Admin notes about the booking."
+            }
+        }
+    },
+
+    "normalization": {
+        "date": [
+            "convert Date object → YYYY-MM-DD",
+            "replace '/' with '-'",
+            "strip time if included",
+            "validate format"
+        ],
+        "phone": [
+            "remove spaces",
+            "remove parentheses",
+            "remove dashes",
+            "ensure 10 digits"
+        ],
+        "name": [
+            "strip leading/trailing spaces",
+            "capitalize each word"
+        ]
+    },
+
+    "outbound": {
+        "firestore": {
+            "name": "customerName",
+            "email": "customerEmail",
+            "phone": "customerPhone",
+            "address": "address",
+            "date": "date",
+            "deliveryTime": "deliveryTime",
+            "pickupTime": "pickupTime",
+            "overnight": "overnight",
+            "items": "items",
+            "subtotal": "subtotal",
+            "deposit": "deposit",
+            "remaining": "remaining",
+            "waiverFee": "waiverFee",
+            "checkout_url": "checkoutUrl",
+            "transaction_id": "transactionId",
+            "order_id": "orderId",
+            "event_id": "calendarEventId",
+            "status": "status",
+            "note": "note"
+        },
+
+        "square_metadata": {
+            "event_date": "date",
+            "customer_name": "name",
+            "customer_email": "email",
+            "cart_items": "items"
+        },
+
+        "resend": {
+            "admin_checkout_started": [
+                "name", "email", "phone", "date", "deliveryTime",
+                "pickupTime", "overnight", "address", "subtotal",
+                "deposit", "remaining", "waiverFee", "items",
+                "checkout_url"
+            ]
+        },
+
+        "calendar": {
+            "summary": "Buzzy's Party: {name}",
+            "description": "Remaining balance: ${remaining}",
+            "location": "address",
+            "start": "date + deliveryTime",
+            "end": "date + pickupTime"
+        }
+    }
+}

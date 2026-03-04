@@ -2,6 +2,7 @@ import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
+from app.root_schema import build_firestore_doc
 
 # Load JSON string from environment variable
 json_str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")

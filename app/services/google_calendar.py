@@ -1,5 +1,6 @@
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from app.root_schema import build_calendar_payload
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CALENDAR_ID = "buzzysentertainment@gmail.com"  # Owner's Google Calendar email

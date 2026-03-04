@@ -1,6 +1,7 @@
 import os
 import resend
 from dotenv import load_dotenv
+from app.root_schema import normalize_payload, validate_payload, build_square_metadata
 
 load_dotenv()
 

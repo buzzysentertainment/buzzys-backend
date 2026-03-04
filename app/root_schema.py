@@ -1,3 +1,12 @@
+# root_schema.py
+
+import re
+from datetime import datetime
+
+# ---------------------------------------------------------
+# ROOT SCHEMA (your full dictionary)
+# ---------------------------------------------------------
+
 ROOT = {
     "canonical": {
         "customer": {
@@ -247,3 +256,52 @@ ROOT = {
         }
     }
 }
+
+# ---------------------------------------------------------
+# FUNCTION: normalize_payload
+# ---------------------------------------------------------
+
+def normalize_payload(data: dict) -> dict:
+    canonical = {}
+
+    for group, fields in ROOT["canonical"].items():
+        for field, rules in fields.items():
+            for alias in rules["aliases"]:
+                if alias in data:
+                    canonical[field] = data[alias]
+                    break
+
+            if field not in canonical:
+                canonical[field] = None
+
+    return canonical
+
+# ---------------------------------------------------------
+# FUNCTION: validate_payload
+# ---------------------------------------------------------
+
+def validate_payload(canonical: dict):
+    missing = []
+
+    for group, fields in ROOT["canonical"].items():
+        for field, rules in fields.items():
+            if rules.get("required") and not canonical.get(field):
+                missing.append(field)
+
+    return (len(missing) == 0, missing)
+
+# ---------------------------------------------------------
+# FUNCTION: build_square_metadata
+# ---------------------------------------------------------
+
+def build_square_metadata(canonical: dict) -> dict:
+    mapping = ROOT["outbound"]["square_metadata"]
+    return {meta_key: canonical.get(canonical_key) for meta_key, canonical_key in mapping.items()}
+
+# ---------------------------------------------------------
+# FUNCTION: build_resend_params
+# ---------------------------------------------------------
+
+def build_resend_params(canonical: dict, template_key: str) -> dict:
+    fields = ROOT["outbound"]["resend"].get(template_key, [])
+    return {field: canonical.get(field) for field in fields}

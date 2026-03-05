@@ -236,7 +236,6 @@ ROOT = {
             "event_date": "date",
             "customer_name": "name",
             "customer_email": "email",
-            "cart_items": "items"
         },
 
         "resend": {

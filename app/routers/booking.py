@@ -247,7 +247,8 @@ def create_checkout(data: dict):
     location_id = os.getenv("SQUARE_LOCATION_ID")
     redirect_url = "https://www.buzzys.org/booking-success"
 
-    cart_items = data.get("cart", [])
+    cart_items = data.get("cart") or data.get("items") or []
+
     if not cart_items:
         raise HTTPException(status_code=400, detail="Cart is empty")
     customer_name = (

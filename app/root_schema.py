@@ -2,6 +2,7 @@
 
 import re
 from datetime import datetime
+import json
 
 # ---------------------------------------------------------
 # ROOT SCHEMA (your full dictionary)
@@ -320,8 +321,18 @@ def validate_payload(canonical: dict):
 
 def build_square_metadata(canonical: dict) -> dict:
     mapping = ROOT["outbound"]["square_metadata"]
-    return {meta_key: canonical.get(canonical_key) for meta_key, canonical_key in mapping.items()}
+    metadata = {}
 
+    for meta_key, canonical_key in mapping.items():
+        value = canonical.get(canonical_key)
+
+        # Convert lists/dicts to JSON strings
+        if isinstance(value, (list, dict)):
+            metadata[meta_key] = json.dumps(value)
+        else:
+            metadata[meta_key] = str(value) if value is not None else ""
+
+    return metadata
 # ---------------------------------------------------------
 # build_resend_params
 # ---------------------------------------------------------

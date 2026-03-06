@@ -2,7 +2,8 @@ import os
 import resend
 from dotenv import load_dotenv
 from app.root_schema import normalize_payload, validate_payload, build_square_metadata
-from app.firestore import get_booking_by_id  # <-- make sure this import exists
+from app.services.firebase_setup import db
+
 
 load_dotenv()
 

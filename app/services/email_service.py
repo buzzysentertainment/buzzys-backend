@@ -4,11 +4,28 @@ from dotenv import load_dotenv
 from app.root_schema import normalize_payload, validate_payload, build_square_metadata
 from app.services.firebase_setup import db
 
-
 load_dotenv()
-
 resend.api_key = os.getenv("RESEND_API_KEY")
 
+# -------------------------------------------------
+# Firestore Lookup
+# -------------------------------------------------
+def get_booking_by_id(booking_id: str):
+    try:
+        doc = db.collection("bookings").document(booking_id).get()
+        if doc.exists:
+            return doc.to_dict()
+        else:
+            print(f"FIRESTORE: No booking found for ID {booking_id}")
+            return None
+    except Exception as e:
+        print(f"FIRESTORE LOOKUP ERROR: {e}")
+        return None
+
+
+# -------------------------------------------------
+# ICS Generator
+# -------------------------------------------------
 def generate_ics_content(booking_data):
     date_clean = booking_data.get("date", "").replace("-", "")
     ics_lines = [
@@ -27,34 +44,52 @@ def generate_ics_content(booking_data):
     return "\n".join(ics_lines)
 
 
+# -------------------------------------------------
+# Fully Backed-Up Email Service
+# -------------------------------------------------
 def send_email_template(to, template_id=None, data=None, html_content=None, attachments=None):
     try:
         data = data or {}
 
-        # 🔥 NEW: If booking_id exists, fetch full booking to fill missing fields
+        # -------------------------------------------------
+        # 1. Firestore Backup Lookup
+        # -------------------------------------------------
         booking_id = data.get("booking_id")
+        booking = None
+
         if booking_id:
             booking = get_booking_by_id(booking_id)
-            if booking:
-                # Fill missing fields from Firestore
-                data["name"] = data.get("name") or booking.get("name")
-                data["email"] = data.get("email") or booking.get("email")
-                data["date"] = data.get("date") or booking.get("date")
-                data["remaining"] = data.get("remaining") or booking.get("remaining")
-                data["deposit"] = data.get("deposit") or booking.get("deposit")
-                data["total"] = data.get("total") or booking.get("total")
 
-                # If 'to' is missing, use booking email
+            if booking:
+                # List of all fields we want to back up
+                backup_fields = [
+                    "name", "email", "date", "remaining", "deposit", "total",
+                    "address", "phone", "deliveryTime", "pickupTime",
+                    "status", "paymentStatus", "referral_type",
+                    "saveCardForAutopay", "signature", "items", "pricing_breakdown"
+                ]
+
+                # Merge missing fields from Firestore
+                for field in backup_fields:
+                    if not data.get(field):
+                        data[field] = booking.get(field)
+
+                # Fix missing "to"
                 if not to:
                     to = booking.get("email")
 
-        # 🔥 FINAL SAFETY CHECK
-        if not to or str(to).lower() == "undefined":
-            print(f"ABORTING EMAIL: Recipient 'to' is invalid ({to}).")
-            return {"status": "error", "message": "Missing recipient email"}
+        # -------------------------------------------------
+        # 2. Final Safety Check for "to"
+        # -------------------------------------------------
+        if not to or str(to).lower() in ["undefined", "none", "null", ""]:
+            print(f"ABORTING EMAIL: Invalid recipient ({to})")
+            return {"status": "error", "message": "Missing or invalid recipient email"}
 
         recipients = to if isinstance(to, list) else [to]
 
+        # -------------------------------------------------
+        # 3. Build Resend Params
+        # -------------------------------------------------
         params = {
             "from": "Buzzy’s Inflatables <bookings@buzzys.org>",
             "to": recipients,
@@ -72,6 +107,9 @@ def send_email_template(to, template_id=None, data=None, html_content=None, atta
         if attachments:
             params["attachments"] = attachments
 
+        # -------------------------------------------------
+        # 4. Send Email
+        # -------------------------------------------------
         response = resend.Emails.send(params)
         print(f"RESEND SUCCESS: Sent to {recipients}")
         return {"status": "success", "response": response}

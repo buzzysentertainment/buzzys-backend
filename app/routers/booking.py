@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app.root_schema import normalize_payload, validate_payload, build_square_metadata, build_resend_params
 from app.services.google_calendar import create_booking_event, update_booking_event
-from app.services.email_service import send_email_template
+from app.services.email_service import send_email_template, send_email_from_file
 from app.services.firebase_setup import db
 from svix.webhooks import Webhook, WebhookVerificationError
 from square.client import Client
@@ -171,10 +171,11 @@ def create_booking(booking: Booking):
     
 
     # Admin Notification
-    send_email_template(
-        to="buzzysentertainment@gmail.com",
-        template_id=os.getenv("RESEND_ADMIN_NEW_BOOKING_TEMPLATE"),
-        data={
+    send_email_from_file(
+        to=["buzzysentertainment@gmail.com"],
+        template_name="admin_new_booking.html",
+        subject="New Booking Received",
+        params={
             "name": booking.name,
             "email": booking.email,
             "phone": booking.phone,
@@ -426,10 +427,11 @@ def create_checkout(data: dict):
     email_data.setdefault("items", ", ".join(item_summary_list))
 
     # Admin Email Alert
-    send_email_template(
+    send_email_from_file(
         to=["buzzysentertainment@gmail.com", "kandy.stamey@gmail.com"],
-        template_id=os.getenv("RESEND_ADMIN_CHECKOUT_STARTED_TEMPLATE"),
-        data=email_data,
+        template_name="admin_checkout_started.html",
+        subject="Customer Started Checkout",
+        params=email_data,
     )
 
     return {"checkoutUrl": checkout_url}

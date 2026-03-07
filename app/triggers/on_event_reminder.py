@@ -1,9 +1,7 @@
 import os
-from app.services.email_service import send_email_template
+from app.services.email_service import send_email_from_file
 
 def handle_event_reminder(booking: dict):
-    template_id = os.getenv("RESEND_EVENT_REMINDER_TEMPLATE_ID")
-
     data = {
         "customer_name": booking.get("customerName"),
         "balance_due": booking.get("balance"),
@@ -15,8 +13,9 @@ def handle_event_reminder(booking: dict):
         "booking_id": booking.get("booking_id")
     }
 
-    return send_email_template(
-        to=booking.get("customerEmail"),
-        template_id=template_id,
-        data=data
+    return send_email_from_file(
+        to=[booking.get("customerEmail")],
+        template_name="event_reminder.html",
+        subject="Your Event Reminder",
+        params=data
     )

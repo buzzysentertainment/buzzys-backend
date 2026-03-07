@@ -1,5 +1,6 @@
 import os
 import uuid
+from datetime import datetime, timedelta
 from square.client import Client
 from app.services.email_service import send_email_from_file, generate_ics_content
 from app.services.firebase_setup import db
@@ -11,7 +12,12 @@ def handle_deposit_received(booking: dict):
         environment="production"
     )
 
-    # --- 2. CREATE THE BALANCE INVOICE ---
+    # --- 2. CALCULATE DUE DATE (2 DAYS BEFORE EVENT) ---
+    event_date_str = booking.get("date")
+    event_date = datetime.strptime(event_date_str, "%Y-%m-%d")
+    due_date = (event_date - timedelta(days=2)).strftime("%Y-%m-%d")
+
+    # --- 3. CREATE THE BALANCE INVOICE ---
     remaining_val = booking.get("remaining", 0)
     remaining_cents = int(float(remaining_val) * 100)
 
@@ -24,14 +30,14 @@ def handle_deposit_received(booking: dict):
             },
             "payment_requests": [{
                 "request_type": "BALANCE",
-                "due_date": booking.get("date"),
+                "due_date": due_date,
                 "amount_money": {
                     "amount": remaining_cents,
                     "currency": "USD"
                 }
             }],
             "delivery_method": "SHARE_EXTERNALLY",
-            "title": f"Remaining Balance - Event on {booking.get('date')}"
+            "title": f"Remaining Balance - Event on {event_date_str}"
         },
         "idempotency_key": str(uuid.uuid4())
     }
@@ -54,7 +60,7 @@ def handle_deposit_received(booking: dict):
     except Exception as e:
         print(f"SQUARE INVOICE ERROR: {str(e)}")
 
-    # --- 3. PREPARE ITEM LIST ---
+    # --- 4. PREPARE ITEM LIST ---
     items_raw = booking.get("items", [])
     item_names = [
         i.get("title") or i.get("name") or "Party Gear"
@@ -62,7 +68,7 @@ def handle_deposit_received(booking: dict):
     ]
     display_items = ", ".join(item_names) if item_names else "Party Gear"
 
-    # --- 4. PREPARE EMAIL DATA ---
+    # --- 5. PREPARE EMAIL DATA ---
     ics_content = generate_ics_content(booking)
 
     total_val = (
@@ -72,13 +78,14 @@ def handle_deposit_received(booking: dict):
 
     email_data = {
         "customer_name": booking.get("name"),
-        "event_date": booking.get("date"),
+        "event_date": event_date_str,
         "total_amount": f"{float(total_val):.2f}",
         "deposit_amount": f"{float(booking.get('deposit', 0)):.2f}",
         "remaining_amount": f"{float(remaining_val):.2f}",
         "booking_id": booking.get("booking_id"),
         "items": display_items,
-        "pay_link": pay_link
+        "pay_link": pay_link,
+        "due_date": due_date
     }
 
     attachments = [{
@@ -86,7 +93,7 @@ def handle_deposit_received(booking: dict):
         "filename": "event-reminder.ics"
     }]
 
-    # --- 5. SEND EMAIL USING FILE TEMPLATE ---
+    # --- 6. SEND EMAIL USING FILE TEMPLATE ---
     email_res = send_email_from_file(
         to=[booking.get("email")],
         template_name="deposit_received.html",
@@ -94,8 +101,8 @@ def handle_deposit_received(booking: dict):
         params=email_data
     )
 
-    # --- 6. SAVE EMAIL ID FOR RESEND WEBHOOK ---
-    email_id = email_res.get("id")
+    # --- 7. SAVE EMAIL ID FOR RESEND WEBHOOK ---
+    email_id = email_res.get("response", {}).get("id")
     if email_id:
         db.collection("bookings").document(booking["booking_id"]).update({
             "last_email_id": email_id,

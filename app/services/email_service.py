@@ -117,3 +117,32 @@ def send_email_template(to, template_id=None, data=None, html_content=None, atta
     except Exception as e:
         print(f"CRITICAL EMAIL ERROR: {str(e)}")
         return {"status": "error", "message": str(e)}
+def send_email_from_file(to, template_name, subject, params):
+    try:
+        # 1. Load HTML file
+        template_path = os.path.join("app", "email_templates", template_name)
+        with open(template_path, "r") as f:
+            html = f.read()
+
+        # 2. Replace {{variables}}
+        for key, value in params.items():
+            html = html.replace(f"{{{{{key}}}}}", str(value))
+
+        # 3. Build Resend payload
+        recipients = to if isinstance(to, list) else [to]
+
+        payload = {
+            "from": "Buzzy’s Inflatables <bookings@buzzys.org>",
+            "to": recipients,
+            "subject": subject,
+            "html": html
+        }
+
+        # 4. Send email
+        response = resend.Emails.send(payload)
+        print(f"RESEND SUCCESS (file template): Sent to {recipients}")
+        return {"status": "success", "response": response}
+
+    except Exception as e:
+        print(f"CRITICAL EMAIL ERROR (file template): {str(e)}")
+        return {"status": "error", "message": str(e)}

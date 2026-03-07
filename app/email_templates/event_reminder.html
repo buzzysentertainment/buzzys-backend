@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Upcoming Event Reminder</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background: #fff7d1;
+        padding: 20px;
+        color: #333;
+      }
+      .container {
+        max-width: 600px;
+        margin: auto;
+        background: white;
+        padding: 25px;
+        border-radius: 12px;
+        border: 3px solid #f4c542;
+      }
+      h1 {
+        color: #e69500;
+        text-align: center;
+      }
+      .section {
+        margin-bottom: 20px;
+      }
+      .items-box {
+        background: #fff3b0;
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid #f4c542;
+      }
+      .footer {
+        margin-top: 25px;
+        text-align: center;
+        font-size: 14px;
+        color: #777;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <h1>🎉 Your Event Is Coming Up! 🎉</h1>
+
+      <p>Hi {{name}},</p>
+
+      <p>
+        Your Buzzy’s party is almost here! We’re getting everything ready for delivery and setup.
+      </p>
+
+      <p>
+        <strong>Please make sure your remaining balance is paid at least 2 days before your event date.</strong>
+        This ensures your delivery window is confirmed and your equipment is fully reserved.
+      </p>
+
+      <div class="section">
+        <h3>📅 Event Details</h3>
+        <p><strong>Event Date:</strong> {{date}}</p>
+        <p><strong>Delivery Time:</strong> {{deliveryTime}}</p>
+        <p><strong>Pickup Time:</strong> {{pickupTime}}</p>
+        <p><strong>Address:</strong> {{address}}</p>
+      </div>
+
+      <div class="section">
+        <h3>💳 Payment Summary</h3>
+        <p><strong>Deposit Paid:</strong> ${{deposit}}</p>
+        <p><strong>Remaining Balance:</strong> ${{remaining}}</p>
+      </div>
+
+      <div class="section">
+        <h3>🎈 Your Party Gear</h3>
+        <div class="items-box">
+          {{items}}
+        </div>
+      </div>
+
+      <p>
+        If you need to update anything or have questions before your event, just reply to this email — we’re happy to help!
+      </p>
+
+      <div class="footer">
+        Buzzy’s Inflatables • buzzysentertainment@gmail.com
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Your Booking Is Confirmed!</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background: #fff7d1;
+        padding: 20px;
+        color: #333;
+      }
+      .container {
+        max-width: 600px;
+        margin: auto;
+        background: white;
+        padding: 25px;
+        border-radius: 12px;
+        border: 3px solid #f4c542;
+      }
+      h1 {
+        color: #e69500;
+        text-align: center;
+      }
+      .section {
+        margin-bottom: 20px;
+      }
+      .items-box {
+        background: #fff3b0;
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid #f4c542;
+      }
+      .footer {
+        margin-top: 25px;
+        text-align: center;
+        font-size: 14px;
+        color: #777;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <h1>🎉 Your Booking Is Confirmed! 🎉</h1>
+
+      <p>Hi {{name}},</p>
+
+      <p>
+        Thank you for booking with Buzzy’s Inflatables! Your reservation is officially confirmed,
+        and we’re excited to bring the fun to your event.
+      </p>
+
+      <div class="section">
+        <h3>📅 Event Details</h3>
+        <p><strong>Event Date:</strong> {{date}}</p>
+        <p><strong>Delivery Time:</strong> {{deliveryTime}}</p>
+        <p><strong>Pickup Time:</strong> {{pickupTime}}</p>
+        <p><strong>Address:</strong> {{address}}</p>
+      </div>
+
+      <div class="section">
+        <h3>💳 Payment Summary</h3>
+        <p><strong>Total:</strong> ${{total}}</p>
+        <p><strong>Deposit Paid:</strong> ${{deposit}}</p>
+        <p><strong>Remaining Balance:</strong> ${{remaining}}</p>
+      </div>
+
+      <div class="section">
+        <h3>🎈 Your Party Gear</h3>
+        <div class="items-box">
+          {{items}}
+        </div>
+      </div>
+
+      <p>
+        If you need to make changes, update your delivery details, or have any questions,
+        contact us at <strong>buzzysentertainment@gmail.com</strong> or call us at
+        <strong>706‑936‑8083</strong>.
+      </p>
+
+      <p>
+        We can’t wait to make your event unforgettable. Thank you for choosing Buzzy’s!
+      </p>
+
+      <div class="footer">
+        Buzzy’s Inflatables • buzzysentertainment@gmail.com
+      </div>
+    </div>
+  </body>
+</html>

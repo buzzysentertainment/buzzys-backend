@@ -19,7 +19,6 @@ from app.triggers.on_contract_received import handle_contract_received
 from app.triggers.on_deposit_received import handle_deposit_received
 from app.triggers.on_payment_declined import handle_payment_declined
 from app.triggers.on_balance_paid import handle_balance_paid
-from app.triggers.on_refund_issued import handle_refund_issued
 from app.triggers.on_event_canceled import handle_event_canceled
 from app.triggers.on_event_reminder import handle_event_reminder
 from app.triggers.on_reengagement import send_anniversary_reminders
@@ -641,9 +640,8 @@ async def square_webhook(request: Request):
                 booking["paymentStatus"] = "balance_paid"
                 handle_balance_paid(booking)
             elif status in ("CANCELED", "REFUNDED"):
-                remaining = float(booking.get("remaining", 0))
-                handle_refund_issued(booking, amount=remaining)
-    
+                doc_ref.update({"paymentStatus": "canceled"})
+                booking["paymentStatus"] = "canceled"
     return {"status": "ok"}
 @router.post("/webhooks/resend")
 async def resend_webhook(request: Request):

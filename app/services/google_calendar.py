@@ -1,6 +1,7 @@
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from app.root_schema import build_calendar_payload
+from datetime import datetime
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CALENDAR_ID = "buzzysentertainment@gmail.com"  # Owner's Google Calendar email
@@ -28,13 +29,17 @@ def create_booking_event(booking):
     )
 
     date = booking.get("date")
+    
+    raw_date = booking.get("date")
+    parsed = datetime.strptime(raw_date, "%m/%d/%Y")
+    google_date = parsed.strftime("%Y-%m-%d")
 
     event_body = {
         "summary": summary,
         "location": location,
         "description": description,
-        "start": {"date": date},
-        "end": {"date": date},
+        "start": {"date": google_date},
+        "end": {"date": google_date},
     }
 
     event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
@@ -56,13 +61,17 @@ def update_booking_event(event_id, booking):
     )
 
     date = booking.get("date")
+    
+    raw_date = booking.get("date")
+    parsed = datetime.strptime(raw_date, "%m/%d/%Y")
+    google_date = parsed.strftime("%Y-%m-%d")
 
     event_body = {
         "summary": summary,
         "location": location,
         "description": description,
-        "start": {"date": date},
-        "end": {"date": date},
+        "start": {"date": google_date},
+        "end": {"date": google_date},
     }
 
     updated_event = service.events().update(

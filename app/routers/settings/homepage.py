@@ -1,25 +1,40 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.auth import verify_admin_token
 from app.services.firebase_setup import db
 
 router = APIRouter()
 
+# Aligned with HomepageSettings.jsx and AdminSettings.jsx
 DEFAULT_HOMEPAGE = {
-    "heroTitle": "Welcome to Buzzy's Inflatables!",
-    "heroSubtitle": "Fun for every event",
+    "heroTitle": "Buzzy's Inflatable Rentals",
+    "heroSubtitle": "Best bounce houses in town!",
+    "heroButtonText": "Book Now",
     "heroImage": "",
-    "ctaText": "Book Now",
+    "announcement": "Now booking for Summer 2026!",
+    "showAnnouncement": True,
+    "showFeatured": True,
+    "featuredItems": []
 }
 
 @router.get("/homepage")
 def get_homepage(user=Depends(verify_admin_token)):
-    doc = db.collection("settings").document("homepage").get()
-    if not doc.exists:
-        db.collection("settings").document("homepage").set(DEFAULT_HOMEPAGE)
-        return {"homepage": DEFAULT_HOMEPAGE}
-    return {"homepage": doc.to_dict()}
+    try:
+        doc = db.collection("settings").document("homepage").get()
+        if not doc.exists:
+            # Initialize Firestore with defaults if empty
+            db.collection("settings").document("homepage").set(DEFAULT_HOMEPAGE)
+            return DEFAULT_HOMEPAGE
+        
+        # Return the data directly to simplify frontend setPreviewData(res.data)
+        return doc.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/homepage/update")
 def update_homepage(data: dict, user=Depends(verify_admin_token)):
-    db.collection("settings").document("homepage").set(data, merge=True)
-    return {"success": True}
+    try:
+        # merge=True protects any fields you might add later (like SEO tags)
+        db.collection("settings").document("homepage").set(data, merge=True)
+        return {"success": True, "updated_data": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Firestore error: {str(e)}")

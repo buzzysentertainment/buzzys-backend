@@ -1,40 +1,57 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from typing import List, Optional
 from app.auth import verify_admin_token
+from app.services.firebase_setup import db
 
 router = APIRouter(prefix="/admin/settings", tags=["Admin Settings"])
 
-class ThemeSettings(BaseModel):
-    primaryColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
-    secondaryColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
-    accentColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
-    backgroundColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
-    cardBackgroundColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
-    textColor: str = Field(..., pattern=r"^#([0-9a-fA-F]{6})$")
-    buttonRadius: int = Field(..., ge=0, le=40)
+# --- DATA MODELS (The Schema) ---
 
-DEFAULT_THEME = {
-    "primaryColor": "#ff7ac4",
-    "secondaryColor": "#ffd166",
-    "accentColor": "#7bdff2",
-    "backgroundColor": "#ffffff",
-    "cardBackgroundColor": "#f9f9ff",
-    "textColor": "#222222",
-    "buttonRadius": 12,
-}
+class SiteSettings(BaseModel):
+    # Theme
+    primary: str = "#ff7ac4"
+    secondary: str = "#ffd166"
+    accent: str = "#7bdff2"
+    background: str = "#ffffff"
+    card: str = "#f9f9ff"
+    text: str = "#222222"
+    radius: int = 12
+    
+    # Homepage
+    heroTitle: str = "Buzzy's Inflatable Rentals"
+    heroSubtitle: str = "Best bounce houses in town!"
+    heroButtonText: str = "Book Now"
+    heroImage: str = ""
+    announcement: str = ""
+    showAnnouncement: bool = True
+    showFeatured: bool = True
+    featuredItems: List[str] = []
 
-# TEMPORARY IN‑MEMORY STORAGE
-THEME_STATE = DEFAULT_THEME.copy()
+# --- ROUTES ---
 
-@router.get("/theme", response_model=ThemeSettings)
-def get_theme_settings(admin=Depends(verify_admin_token)):
-    return THEME_STATE
+@router.get("/all", response_model=SiteSettings)
+def get_all_settings(admin=Depends(verify_admin_token)):
+    """Fetches the global site configuration from Firestore."""
+    try:
+        doc_ref = db.collection("settings").document("site_config")
+        doc = doc_ref.get()
+        
+        if doc.exists:
+            return doc.to_dict()
+        
+        # If no config exists, return the default model values
+        return SiteSettings().dict()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch settings: {str(e)}")
 
-@router.put("/theme", response_model=ThemeSettings)
-def update_theme_settings(
-    new_settings: ThemeSettings,
-    admin=Depends(verify_admin_token),
-):
-    global THEME_STATE
-    THEME_STATE = new_settings.dict()
-    return THEME_STATE
+@router.put("/all")
+def update_all_settings(settings: SiteSettings, admin=Depends(verify_admin_token)):
+    """Overwrites the site configuration with the new draft from the frontend."""
+    try:
+        doc_ref = db.collection("settings").document("site_config")
+        # Save the validated data
+        doc_ref.set(settings.dict(), merge=True)
+        return {"status": "success", "message": "Site configuration published live."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database write failed: {str(e)}")

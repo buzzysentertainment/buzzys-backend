@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.auth import verify_admin_token
 from app.services.firebase_setup import db
 
 router = APIRouter()
 
-# Default pricing structure (matches your prices.js)
+# -------------------------------------------------
+# MASTER PRICING SCHEMA (Source of Truth)
+# -------------------------------------------------
 DEFAULT_PRICING = {
     "taxRate": 0.09,
     "deliveryFee": 25,
@@ -36,51 +38,47 @@ DEFAULT_PRICING = {
     }
 }
 
-
 # -------------------------------------------------
-# GET PRICING (admin only) — WITH AUTO‑REPAIR
+# GET PRICING — WITH AUTO‑REPAIR
 # -------------------------------------------------
 @router.get("/pricing")
 def get_pricing(user=Depends(verify_admin_token)):
-    doc_ref = db.collection("settings").document("pricing")
-    doc = doc_ref.get()
+    try:
+        doc_ref = db.collection("settings").document("pricing")
+        doc = doc_ref.get()
 
-    # Load existing data if present
-    data = doc.to_dict() if doc.exists else None
+        # Load existing data or start fresh
+        data = doc.to_dict() if doc.exists else None
 
-    # If missing entirely OR missing items → rebuild full structure
-    if not data or "items" not in data or not isinstance(data.get("items"), dict):
-        doc_ref.set(DEFAULT_PRICING)
-        return {"pricing": DEFAULT_PRICING}
+        # Rebuild full structure if the document is missing or corrupted
+        if not data or "items" not in data or not isinstance(data.get("items"), dict):
+            doc_ref.set(DEFAULT_PRICING)
+            return {"pricing": DEFAULT_PRICING}
 
-    repaired = False
+        repaired = False
 
-    # Ensure all top-level fields exist
-    for key, value in DEFAULT_PRICING.items():
-        if key not in data:
-            data[key] = value
-            repaired = True
+        # Check for missing top-level keys (taxRate, deliveryFee, etc.)
+        for key, value in DEFAULT_PRICING.items():
+            if key not in data:
+                data[key] = value
+                repaired = True
 
-    # Ensure items object exists
-    if "items" not in data or not isinstance(data["items"], dict):
-        data["items"] = DEFAULT_PRICING["items"]
-        repaired = True
+        # Check for missing individual inflatables/add-ons
+        for item_key, item_value in DEFAULT_PRICING["items"].items():
+            if item_key not in data["items"]:
+                data["items"][item_key] = item_value
+                repaired = True
 
-    # Ensure each inflatable/add-on exists
-    for item_key, item_value in DEFAULT_PRICING["items"].items():
-        if item_key not in data["items"]:
-            data["items"][item_key] = item_value
-            repaired = True
+        # If we had to fix anything, update the database silently
+        if repaired:
+            doc_ref.set(data)
 
-    # Write repaired version back to Firestore
-    if repaired:
-        doc_ref.set(data)
-
-    return {"pricing": data}
-
+        return {"pricing": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Pricing Retrieval Error: {str(e)}")
 
 # -------------------------------------------------
-# UPDATE PRICING (admin only)
+# UPDATE PRICING
 # -------------------------------------------------
 @router.put("/pricing")
 def update_pricing(data: dict, user=Depends(verify_admin_token)):
@@ -88,5 +86,11 @@ def update_pricing(data: dict, user=Depends(verify_admin_token)):
     Accepts full or partial pricing updates.
     merge=True ensures only changed fields are overwritten.
     """
-    db.collection("settings").document("pricing").set(data, merge=True)
-    return {"success": True}
+    if not data:
+        raise HTTPException(status_code=400, detail="Pricing update cannot be empty.")
+
+    try:
+        db.collection("settings").document("pricing").set(data, merge=True)
+        return {"success": True, "message": "Pricing structure updated."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Pricing Update Error: {str(e)}")

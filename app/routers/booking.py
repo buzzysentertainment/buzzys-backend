@@ -51,18 +51,23 @@ def send_event_day_reminder(booking):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_charge, staff_fee, is_tax_exempt):
+def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_charge, staff_fee, is_tax_exempt, promo_discount=0, promo_percent=0):
     """
     Encapsulated logic for price calculations to ensure consistency.
     """
     # 1. Apply Discounts
-    discount_amount = 0
+    referral_discount_amount = 0
     if referral_type == "Friend":
-        discount_amount = raw_subtotal * 0.05
+        referral_discount_amount = raw_subtotal * 0.05
     elif referral_type == "Repeat":
-        discount_amount = raw_subtotal * 0.10
+        referral_discount_amount = raw_subtotal * 0.10
         
-    subtotal_after_discount = raw_subtotal - discount_amount
+    percent_discount_amount = raw_subtotal * (promo_percent / 100)   
+        
+    total_discounts = referral_discount_amount + promo_discount + percent_discount_amount
+
+    subtotal_after_discount = max(0, raw_subtotal - total_discounts)
+    
     
     # 2. Waiver Fee
     waiver_fee = round(subtotal_after_discount * 0.08, 2) if damage_waiver_opt else 0
@@ -78,7 +83,8 @@ def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_ch
     
     return {
         "subtotal": raw_subtotal,
-        "discount": discount_amount,
+        "referral_discount": referral_discount_amount,
+        "promo_discount": promo_discount + percent_discount_amount,
         "waiver": waiver_fee,
         "tax": tax_total,
         "total": total_dollars,
@@ -135,6 +141,29 @@ async def check_availability(data: dict):
                 }
                 
     return {"available": True}
+    
+@router.post("/validate-coupon")
+async def validate_coupon(data: dict):   
+    code = data.get("code", "").upper().strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="No code provided")
+    promo_ref = db.collection("promo_codes").document(code).get()   
+    
+    if not promo_ref.exists:
+        return {"valid": False, "message": "Invalid promo code."}
+    promo = promo_ref.to_dict()
+    
+    if "expiry" in promo:
+        if datetime.utcnow() > promo["expiry"].replace(tzinfo=None):
+            return {"valid": False, "message": "This code has expired."}
+            
+    return {
+        "valid": True,
+        "amountOff": promo.get("amount", 0),
+        "percentOff": promo.get("percent", 0),
+        "description": promo.get("description", "Discount Applied!")
+    }    
+        
 
 @router.post("/")
 def create_booking(booking: Booking):
@@ -298,6 +327,8 @@ def create_checkout(data: dict):
     
     distance_charge = float(data.get("distanceCharge", 0))
     staff_fee = float(data.get("staffFee", 0))
+    promo_discount = float(data.get("discount", 0)) 
+    promo_percent = float(data.get("percentOff", 0))
     
     
     # Process Item Titles and Subtotal
@@ -314,7 +345,8 @@ def create_checkout(data: dict):
     # Run Price Calculation Logic
     pricing = calculate_totals(
         raw_subtotal, referral_type, damage_waiver_opt, 
-        distance_charge, staff_fee, is_tax_exempt
+        distance_charge, staff_fee, is_tax_exempt,
+        promo_discount=promo_discount, promo_percent=promo_percent
     )
     
     booking_id = str(uuid.uuid4())
@@ -638,10 +670,6 @@ async def square_webhook(request: Request):
             if status == "PAID":
                 doc_ref.update({"paymentStatus": "balance_paid"})
                 booking["paymentStatus"] = "balance_paid"
-                handle_balance_paid(booking)
-            elif status in ("CANCELED", "REFUNDED"):
-                doc_ref.update({"paymentStatus": "canceled"})
-                booking["paymentStatus"] = "canceled"
     return {"status": "ok"}
 @router.post("/webhooks/resend")
 async def resend_webhook(request: Request):
@@ -693,4 +721,5 @@ async def resend_webhook(request: Request):
         elif event_type == "email.complained":
             doc_ref.update({"emailStatus": "Marked as Spam ⚠️"})
             
-    return {"status": "ok"}
+    return {"status": "ok"}             
+       

@@ -1,4 +1,4 @@
-]from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from app.auth import verify_admin_token
 from app.services.firebase_setup import db
 

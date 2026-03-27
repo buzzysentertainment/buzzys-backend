@@ -1,17 +1,32 @@
+import os
+import json
+from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from app.root_schema import build_calendar_payload
-from datetime import datetime
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CALENDAR_ID = "buzzysentertainment@gmail.com"  # Owner's Google Calendar email
 
+
 def get_calendar_service():
-    creds = service_account.Credentials.from_service_account_file(
-        "app/google-service-account.json",  # Path to your JSON file
+    """
+    Loads Google service account credentials from the Render environment variable
+    GOOGLE_SERVICE_ACCOUNT_JSON instead of a local file.
+    """
+
+    # Load JSON string from environment
+    service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+
+    # Build credentials object
+    creds = service_account.Credentials.from_service_account_info(
+        service_account_info,
         scopes=SCOPES,
     )
+
+    # Build Google Calendar API client
     return build("calendar", "v3", credentials=creds)
+
 
 def create_booking_event(booking):
     service = get_calendar_service()
@@ -28,8 +43,7 @@ def create_booking_event(booking):
         f"Status: {booking.get('status', 'Pending')}"
     )
 
-    date = booking.get("date")
-    
+    # Convert MM/DD/YYYY → YYYY-MM-DD
     raw_date = booking.get("date")
     parsed = datetime.strptime(raw_date, "%m/%d/%Y")
     google_date = parsed.strftime("%Y-%m-%d")
@@ -44,7 +58,8 @@ def create_booking_event(booking):
 
     event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
     return event.get("id")
-    
+
+
 def update_booking_event(event_id, booking):
     service = get_calendar_service()
 
@@ -60,8 +75,7 @@ def update_booking_event(event_id, booking):
         f"Status: {booking.get('paymentStatus', 'Pending')}"
     )
 
-    date = booking.get("date")
-    
+    # Convert MM/DD/YYYY → YYYY-MM-DD
     raw_date = booking.get("date")
     parsed = datetime.strptime(raw_date, "%m/%d/%Y")
     google_date = parsed.strftime("%Y-%m-%d")

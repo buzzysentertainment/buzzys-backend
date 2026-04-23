@@ -36,6 +36,8 @@ class Booking(BaseModel):
     date: str
     items: list
     total: float
+    mileageFee: float = 0
+    distance: float = 0
 
 # ---------------------------------------------------------
 # HELPERS
@@ -184,6 +186,8 @@ def create_booking(booking: Booking):
     booking_data["paymentStatus"] = "pending"
     booking_data["contractStatus"] = "pending"
     booking_data["status"] = "active"
+    booking_data["mileageFee"] = booking.mileageFee
+    booking_data["distance"] = booking.distance
 
     db.collection("bookings").document(booking_id).set(booking_data)
     
@@ -325,7 +329,7 @@ def create_checkout(data: dict):
     damage_waiver_opt = data.get("damageWaiver", False)
     signature = data.get("signature", "Electronic Signature")
     
-    distance_charge = float(data.get("distanceCharge", 0))
+    distance_charge = float(data.get("mileageFee", 0))
     staff_fee = float(data.get("staffFee", 0))
     promo_discount = float(data.get("discount", 0)) 
     promo_percent = float(data.get("percentOff", 0))
@@ -370,6 +374,16 @@ def create_checkout(data: dict):
         },
     ]
     
+    if distance_charge > 0:
+       line_items.append({
+           "name": f"Mileage Fee ({data.get('distance', 0)} miles)",
+           "quantity": "1",
+           "base_price_money": {
+               "amount": int(distance_charge * 100),
+               "currency": "USD"
+            }  
+        })    
+    
     for item in cart_items:
         item_title = item.get("title") or item.get("name") or "Rental Item"
         line_items.append({
@@ -385,7 +399,12 @@ def create_checkout(data: dict):
             "idempotency_key": str(uuid.uuid4()),
             "location_id": location_id,
             "line_items": line_items,
-            "metadata": build_square_metadata(canonical),
+            "metadata": {
+                **build_square_metadata(canonical),
+                "mileageFee": str(distance_charge),
+                "distance": str(data.get("distance", 0))
+            },
+            
             "note": (
                 f"BookingID: {booking_id} | "
                 f"Customer: {customer_name} | "

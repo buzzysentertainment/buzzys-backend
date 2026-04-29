@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # EXISTING ROUTERS
-from app.routers import email_test, booking, admin
+from app.routers import email_test, booking, admin, utils
 
 # NEW SETTINGS ROUTERS
 from app.routers.settings import (
@@ -18,6 +18,8 @@ from app.routers.settings import (
 
 # FIREBASE
 from app.services.firebase_setup import db
+
+
 
 
 # -------------------------------------------------
@@ -51,6 +53,7 @@ app.include_router(email_test.router)
 app.include_router(booking.router)
 app.include_router(admin.router)
 app.include_router(tasks.router)
+app.include_router(utils.router)
 
 
 # Settings (ALL admin settings panels)

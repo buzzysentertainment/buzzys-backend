@@ -16,7 +16,7 @@ async def get_distance(data: dict):
     # Call Google Distance Matrix API
     url = (
         f"https://maps.googleapis.com/maps/api/distancematrix/json?"
-        f"origins={origin}&destinations={destination}&units=imperial&key={api_key}"
+        f"origins={origin}&destinations={destination}&units=imperial&key={AIzaSyAG9MA_9YDnT5rfzVDWF6kyNNU-aPR5DYc}"
     )
     
     try:

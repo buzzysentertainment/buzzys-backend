@@ -275,7 +275,7 @@ def create_checkout(data: dict):
     client = Client(
         access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
         environment="production",
-    )
+    ) 
     save_card_requested = data.get("saveCardForAutopay", False)
     location_id = os.getenv("SQUARE_LOCATION_ID")
     redirect_url = "https://www.buzzys.org/booking-success"
@@ -352,6 +352,57 @@ def create_checkout(data: dict):
         distance_charge, staff_fee, is_tax_exempt,
         promo_discount=promo_discount, promo_percent=promo_percent
     )
+    cust_res = client.customers.create_customer({
+        "given_name": customer_name,
+        "email_address": customer_email,
+        "phone_number": customer_phone,
+        "address": {
+            "address_line_1": address_input.get('address_line_1', '') if isinstance(address_input, dict) else "",
+            "locality": address_input.get('locality', '') if isinstance(address_input, dict) else "",
+            "postal_code": address_input.get('postal_code', '') if isinstance(address_input, dict) else ""
+        }
+    })
+    sq_cust_id = cust_res.body['customer']['id']
+    
+    order_res = client.orders.create_order({
+        "order": {
+            "location_id": location_id,
+            "customer_id": sq_cust_id,
+            "line_items": [
+                {
+                    "name": "Buzzy's Rental Booking",
+                    "quantity": "1",
+                    "base_price_money": {"amount": int(pricing['total'] * 100), "currency": "USD"}
+                }
+            ]    
+        }
+    })
+    sq_order_id = order_res.body['order']['id']
+    
+    inv_res = client.invoices.create_invoice({
+        "invoice": {
+            "location_id": location_id,
+            "order_id": sq_order_id,
+            "primary_recipient": {"customer_id": sq_cust_id},
+            "payment_requests": [
+                {
+                    "request_type": "DEPOSIT",
+                    "due_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "fixed_amount_requested_money": {"amount": int(pricing["deposit"] * 100), "currency": "USD"}
+                },
+                {
+                    "request_type": "BALANCE",
+                    "due_date": (datetime.strptime(booking_date, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d"),
+                    "fixed_amount_requested_money": {"amount": int(pricing["remaining"] * 100), "currency": "USD"}
+                }    
+            ],
+            "delivery_method": "EMAIL",
+            "title": f"Buzzy's Booking - {booking_date}"
+        }    
+    })   
+    sq_inv_id = inv_res.body['invoice']['id']
+        
+    client.invoices.publish_invoice(sq_inv_id, {"idempotency_key": str(uuid.uuid4())})
     
     booking_id = str(uuid.uuid4())
     address_input = data.get("address") or {}

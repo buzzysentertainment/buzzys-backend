@@ -4,7 +4,7 @@ import requests
 
 router = APIRouter(prefix="/utils", tags=["Utils"])
 
-@router.post("/distance")
+@router.post("/distance/")
 async def get_distance(data: dict):
     origin = data.get("origin")
     destination = data.get("destination")
@@ -34,6 +34,9 @@ async def get_distance(data: dict):
                 raise HTTPException(status_code=400, detail=f"Google Element Error: {element.get('status')}")
         
         raise HTTPException(status_code=400, detail="Google API Error: " + res_data.get("status", "Unknown"))
+        
+    except HTTPException as he:
+        raise he    
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

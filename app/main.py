@@ -31,19 +31,33 @@ app = FastAPI()
 # -------------------------------------------------
 # CORS CONFIG (PRODUCTION ONLY)
 # -------------------------------------------------
+@app.middleware("http")
+async def force_cors_headers(request: Request, call_next):
+    # Handle Preflight (OPTIONS) requests immediately
+    if request.method == "OPTIONS":
+        response = Response()
+        response.headers["Access-Control-Allow-Origin"] = "https://www.buzzys.org"
+        response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS, DELETE, PUT"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Max-Age"] = "600"
+        return response
+
+    # Process the actual request
+    response = await call_next(request)
+    
+    # Inject the header into every single outgoing response
+    response.headers["Access-Control-Allow-Origin"] = "https://www.buzzys.org"
+    return response
+
+# Standard middleware as a secondary layer
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://www.buzzys.org",
-        "https://buzzys.org",
-        "https://buzzysdatabase.web.app"
-    ],
+    allow_origins=["https://www.buzzys.org", "https://buzzys.org"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_header=["*"]
+    expose_headers=["*"],
 )
-
 
 # -------------------------------------------------
 # REGISTER ROUTERS

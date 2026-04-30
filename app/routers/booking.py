@@ -10,9 +10,6 @@ from square.utilities.webhooks_helper import is_valid_webhook_event_signature
 from datetime import datetime, timedelta
 import os
 import uuid
-import hmac
-import hashlib
-import base64
 
 # --- ALL AUTOMATION TRIGGERS ---
 from app.triggers.on_contract_received import handle_contract_received
@@ -38,24 +35,17 @@ class Booking(BaseModel):
     total: float
     mileageFee: float = 0
     distance: float = 0
+    referralType: str = "None"
+    damageWaiver: bool = False
 
 # ---------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------
 
-def send_event_day_reminder(booking):
-    """
-    Manual trigger helper for sending a reminder for a specific booking.
-    """
-    try:
-        handle_event_reminder(booking)
-        return {"status": "success", "message": "Event reminder sent"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
 def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_charge, staff_fee, is_tax_exempt, promo_discount=0, promo_percent=0):
     """
-    Encapsulated logic for price calculations to ensure consistency.
+    Standardized pricing engine to ensure math is identical between 
+    the frontend, Square link, and the Firebase record.
     """
     # 1. Apply Discounts
     referral_discount_amount = 0
@@ -65,21 +55,19 @@ def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_ch
         referral_discount_amount = raw_subtotal * 0.10
         
     percent_discount_amount = raw_subtotal * (promo_percent / 100)   
-        
     total_discounts = referral_discount_amount + promo_discount + percent_discount_amount
 
     subtotal_after_discount = max(0, raw_subtotal - total_discounts)
     
-    
-    # 2. Waiver Fee
+    # 2. Waiver Fee (8% of equipment subtotal)
     waiver_fee = round(subtotal_after_discount * 0.08, 2) if damage_waiver_opt else 0
     
-    # 3. Tax
+    # 3. Tax (7% on equipment + waiver + distance)
     taxable_amount = subtotal_after_discount + waiver_fee + distance_charge
     tax_total = round(taxable_amount * 0.07, 2) if not is_tax_exempt else 0
     
-    # 4. Final Totals
-    total_dollars = taxable_amount + tax_total + staff_fee
+    # 4. Final Split
+    total_dollars = round(taxable_amount + tax_total + staff_fee, 2)
     deposit = round(total_dollars * 0.35, 2)
     remaining = round(total_dollars - deposit, 2)
     
@@ -100,36 +88,17 @@ def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_ch
 
 @router.post("/check-availability")
 async def check_availability(data: dict):
-    """
-    Checks if specific items are already booked for a given date.
-    """
-    canonical = normalize_payload(data)
-    is_valid, missing = validate_payload(canonical)
-    if not is_valid:
-        print("ROOT VALIDATION WARNING (check-availability):", missing)
-    
-    target_date = (
-        data.get("date")
-        or data.get("eventDate")
-        or canonical.get("date")
-    )
-    requested_item_titles = (
-        data.get("items")
-        or canonical.get("items")
-        or []
-    )    
+    target_date = data.get("date") or data.get("eventDate")
+    requested_item_titles = data.get("items") or []
 
     if not target_date:
         raise HTTPException(status_code=400, detail="Date is required")
 
     bookings_ref = db.collection("bookings")
-    query = bookings_ref.where("date", "==", target_date)\
-                        .where("status", "==", "active")\
-                        .stream()
+    query = bookings_ref.where("date", "==", target_date).where("status", "==", "active").stream()
     
     for doc in query:
         existing_booking = doc.to_dict()
-        # Skip failed payments so they don't block availability
         if existing_booking.get("paymentStatus") == "failed":
             continue
 
@@ -137,24 +106,21 @@ async def check_availability(data: dict):
         for item in existing_items:
             existing_title = item.get("title") or item.get("name")
             if existing_title in requested_item_titles:
-                return {
-                    "available": False, 
-                    "conflict": existing_title
-                }
+                return {"available": False, "conflict": existing_title}
                 
     return {"available": True}
-    
+
 @router.post("/validate-coupon")
 async def validate_coupon(data: dict):   
     code = data.get("code", "").upper().strip()
     if not code:
         raise HTTPException(status_code=400, detail="No code provided")
-    promo_ref = db.collection("promo_codes").document(code).get()   
     
+    promo_ref = db.collection("promo_codes").document(code).get()   
     if not promo_ref.exists:
         return {"valid": False, "message": "Invalid promo code."}
-    promo = promo_ref.to_dict()
     
+    promo = promo_ref.to_dict()
     if "expiry" in promo:
         if datetime.utcnow() > promo["expiry"].replace(tzinfo=None):
             return {"valid": False, "message": "This code has expired."}
@@ -164,649 +130,227 @@ async def validate_coupon(data: dict):
         "amountOff": promo.get("amount", 0),
         "percentOff": promo.get("percent", 0),
         "description": promo.get("description", "Discount Applied!")
-    }    
-        
-
-@router.post("/")
-def create_booking(booking: Booking):
-    """
-    Initial entry point for a booking. This saves the record before payment.
-    """
-    total = float(booking.total)
-    deposit = round(total * 0.35, 2)
-    remaining = round(total - deposit, 2)
-
-    booking_id = str(uuid.uuid4())
-
-    booking_data = booking.dict()
-    booking_data["deposit"] = deposit
-    booking_data["remaining"] = remaining
-    booking_data["created_at"] = datetime.utcnow().isoformat()
-    booking_data["booking_id"] = booking_id
-    booking_data["paymentStatus"] = "pending"
-    booking_data["contractStatus"] = "pending"
-    booking_data["status"] = "active"
-    booking_data["mileageFee"] = booking.mileageFee
-    booking_data["distance"] = booking.distance
-
-    db.collection("bookings").document(booking_id).set(booking_data)
-    
-    # Create Google Calendar Event
-    try:
-        event_id = create_booking_event(booking_data)
-        db.collection("bookings").document(booking_id).update({
-            "google_event_id": event_id
-        })
-    except Exception as e:
-        print("GOOGLE CALENDAR ERROR:", e)
-
-    
-
-    # Admin Notification
-    send_email_from_file(
-        to=["buzzysentertainment@gmail.com"],
-        template_name="admin_new_booking.html",
-        subject="New Booking Received",
-        params={
-            "name": booking.name,
-            "email": booking.email,
-            "phone": booking.phone,
-            "date": booking.date,
-            "total": f"${total:.2f}",
-            "deposit": f"${deposit:.2f}",
-            "booking_id": booking_id,
-            "items": ", ".join([str(i) for i in booking.items]),
-            "remaining": f"${remaining:.2f}"
-        }
-    )
-
-    return {"status": "success", "message": "Booking received", "booking_id": booking_id}
-
-@router.get("/all")
-def get_all_bookings():
-    """
-    Dashboard route to fetch and normalize all booking records.
-    """
-    docs = db.collection("bookings").stream()
-    cleaned_bookings = []
-
-    for doc in docs:
-        b = doc.to_dict()
-        
-        # Normalize keys for frontend consistency
-        if "customer_name" in b and not b.get("name"):
-            b["name"] = b["customer_name"]
-        if "eventDate" in b and not b.get("date"):
-            b["date"] = b["eventDate"]
-
-        if "pricing_breakdown" in b and isinstance(b["pricing_breakdown"], dict):
-            if not b.get("total"):
-                b["total"] = b["pricing_breakdown"].get("total", 0)
-
-        # Normalize item strings for display
-        if "items" in b and isinstance(b["items"], list):
-            item_names = []
-            for item in b["items"]:
-                if isinstance(item, dict):
-                    name = item.get("title") or item.get("name") or "Unknown Item"
-                else:
-                    name = str(item)
-                item_names.append(name)
-            b["display_items"] = ", ".join(item_names)
-        else:
-            b["display_items"] = "No items listed"
-
-        cleaned_bookings.append(b)
-
-    cleaned_bookings.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-    return cleaned_bookings
+    }
 
 @router.post("/create-checkout")
-def create_checkout(data: dict):
-    
-    
+async def create_checkout(data: dict):
+    """
+    Refined checkout flow: Creates Square customer, calculates exact pricing,
+    saves pending record, and generates a Payment Link.
+    """
+    client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
     canonical = normalize_payload(data)
-    is_valid, missing = validate_payload(canonical)
-    if not is_valid:
-        print("ROOT VALIDATION WARNING — Missing:", missing)
-        
-    raw_address = data.get("address") or {}
+    booking_id = str(uuid.uuid4())
     
-    if isinstance(raw_address, dict):
-        address_input = raw_address
-    else:
-        address_input = {
-            "address_line_1": str(raw_address),
-            "locality": data.get("city", ""),
-            "administrative_district_level_1": data.get("state", ""),
-            "postal_code": data.get("zip", "")
+    # 1. Identity Extraction
+    customer_name = data.get("customerName") or data.get("name") or canonical.get("name") or "Valued Customer"
+    customer_email = data.get("customerEmail") or data.get("email") or canonical.get("email") or ""
+    customer_phone = data.get("customerPhone") or data.get("phone") or canonical.get("phone") or ""
+    booking_date = data.get("eventDate") or data.get("date") or canonical.get("date") or ""
+
+    # 2. Address Handling
+    raw_addr = data.get("address") or {}
+    if isinstance(raw_addr, dict):
+        addr_line_1 = raw_addr.get("address_line_1", "")
+        city = raw_addr.get("locality", data.get("city", ""))
+        delivery_address_display = f"{addr_line_1}, {city}"
+        sq_address = {
+            "address_line_1": addr_line_1,
+            "locality": city,
+            "postal_code": raw_addr.get("postal_code", data.get("zip", ""))
         }
-    delivery_address_display = (   
-        f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}"
-        if isinstance(raw_address, dict) else str(raw_address)
-    )    
-     
-    """
-    Generates a Square Payment Link and prepares the finalized booking record.
-    """
-    client = Client(
-        access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
-        environment="production",
-    ) 
-    save_card_requested = data.get("saveCardForAutopay", False)
-    location_id = os.getenv("SQUARE_LOCATION_ID")
-    redirect_url = "https://www.buzzys.org/booking-success"
+    else:
+        delivery_address_display = str(raw_addr)
+        sq_address = {"address_line_1": delivery_address_display}
 
+    # 3. Pricing Calculation
     cart_items = data.get("cart") or data.get("items") or []
-
-    if not cart_items:
-        raise HTTPException(status_code=400, detail="Cart is empty")
-    customer_name = (
-        data.get("customerName")
-        or data.get("name")
-        or canonical.get("name")
-        or "Valued Customer"
-    )
-    customer_email = (
-        data.get("customerEmail")
-        or data.get("email")
-        or canonical.get("email")
-        or ""
-    )
-    customer_phone = (
-        data.get("customerPhone")
-        or data.get("phone")
-        or canonical.get("phone")
-        or ""
-    )
-    booking_date = (
-        data.get("eventDate")
-        or data.get("date")
-        or canonical.get("date")
-        or ""
-    )
-    delivery_time = (
-        data.get("deliveryTime")
-        or canonical.get("deliveryTime")
-        or ""
-    )
-    pickup_time = (
-        data.get("pickupTime")
-        or canonical.get("pickupTime")
-        or ""
-    )    
-    overnight = (
-        data.get("overnight")
-        if "overnight" in data
-        else canonical.get("overnight", False)
-    )
-      
-    referral_type = data.get("referralType", "None") 
-    is_tax_exempt = data.get("isTaxExempt", False)
-    damage_waiver_opt = data.get("damageWaiver", False)
-    signature = data.get("signature", "Electronic Signature")
+    raw_subtotal = sum(float(i.get("price", 0)) for i in cart_items)
     
-    distance_charge = float(data.get("mileageFee", 0))
-    staff_fee = float(data.get("staffFee", 0))
-    promo_discount = float(data.get("discount", 0)) 
-    promo_percent = float(data.get("percentOff", 0))
-    
-    
-    # Process Item Titles and Subtotal
-    item_summary_list = []
-    raw_subtotal = 0
-    for item in cart_items:
-        price = float(item.get("price", 0))
-        raw_subtotal += price
-        title = item.get("title") or item.get("name", "Item")
-        if item.get("overnight") is True:
-            title += " (Overnight)"
-        item_summary_list.append(title)
-        
-    # Run Price Calculation Logic
     pricing = calculate_totals(
-        raw_subtotal, referral_type, damage_waiver_opt, 
-        distance_charge, staff_fee, is_tax_exempt,
-        promo_discount=promo_discount, promo_percent=promo_percent
+        raw_subtotal,
+        data.get("referralType", "None"),
+        data.get("damageWaiver", False),
+        float(data.get("mileageFee", 0)),
+        float(data.get("staffFee", 0)),
+        data.get("isTaxExempt", False),
+        promo_discount=float(data.get("discount", 0)),
+        promo_percent=float(data.get("percentOff", 0))
     )
+
+    # 4. Create Square Customer (Required for Autopay/Card Capture)
     cust_res = client.customers.create_customer({
         "given_name": customer_name,
         "email_address": customer_email,
         "phone_number": customer_phone,
-        "address": {
-            "address_line_1": address_input.get('address_line_1', '') if isinstance(address_input, dict) else "",
-            "locality": address_input.get('locality', '') if isinstance(address_input, dict) else "",
-            "postal_code": address_input.get('postal_code', '') if isinstance(address_input, dict) else ""
-        }
+        "address": sq_address
     })
+    if "errors" in cust_res.body:
+        raise HTTPException(status_code=400, detail="Square Customer creation failed")
     sq_cust_id = cust_res.body['customer']['id']
-    
-    order_res = client.orders.create_order({
-        "order": {
-            "location_id": location_id,
-            "customer_id": sq_cust_id,
-            "line_items": [
-                {
-                    "name": "Buzzy's Rental Booking",
-                    "quantity": "1",
-                    "base_price_money": {"amount": int(pricing['total'] * 100), "currency": "USD"}
-                }
-            ]    
-        }
-    })
-    sq_order_id = order_res.body['order']['id']
-    
-    inv_res = client.invoices.create_invoice({
-        "invoice": {
-            "location_id": location_id,
-            "order_id": sq_order_id,
-            "primary_recipient": {"customer_id": sq_cust_id},
-            "payment_requests": [
-                {
-                    "request_type": "DEPOSIT",
-                    "due_date": datetime.utcnow().strftime("%Y-%m-%d"),
-                    "fixed_amount_requested_money": {"amount": int(pricing["deposit"] * 100), "currency": "USD"}
-                },
-                {
-                    "request_type": "BALANCE",
-                    "due_date": (datetime.strptime(booking_date, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d"),
-                    "fixed_amount_requested_money": {"amount": int(pricing["remaining"] * 100), "currency": "USD"}
-                }    
-            ],
-            "delivery_method": "EMAIL",
-            "title": f"Buzzy's Booking - {booking_date}"
-        }    
-    })   
-    sq_inv_id = inv_res.body['invoice']['id']
-        
-    client.invoices.publish_invoice(sq_inv_id, {"idempotency_key": str(uuid.uuid4())})
-    
-    booking_id = str(uuid.uuid4())
-    address_input = data.get("address") or {}
-    
-    if isinstance(address_input, dict):
-        delivery_address_display = f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}"
-    else: 
-        delivery_address_display = str(address_input)
 
-    line_items = [
-        {
-            "name": "Total Due Today (35% Deposit)",
-            "quantity": "1",
-            "base_price_money": {"amount": int(pricing["deposit"] * 100), "currency": "USD"},
-        },
-        {
-            "name": f"Remaining Balance Due 2 Days Before Event Date (${pricing['remaining']:.2f})",
-            "quantity": "1",
-            "base_price_money": {"amount": 0, "currency": "USD"},
-        },
-    ]
+    # 5. Create Payment Link for Deposit
+    item_summary = ", ".join([i.get("title") or i.get("name", "Item") for i in cart_items])
     
-    if distance_charge > 0:
-       line_items.append({
-           "name": f"Mileage Fee ({data.get('distance', 0)} miles)",
-           "quantity": "1",
-           "base_price_money": {
-               "amount": int(distance_charge * 100),
-               "currency": "USD"
-            }  
-        })    
-    
-    for item in cart_items:
-        item_title = item.get("title") or item.get("name") or "Rental Item"
-        line_items.append({
-            "name": item_title,
-            "quantity": "1",
-            "base_price_money": {"amount": 0, "currency": "USD"},
-        })    
-        
-
     body = {
         "idempotency_key": str(uuid.uuid4()),
         "order": {
-            "idempotency_key": str(uuid.uuid4()),
-            "location_id": location_id,
-            "line_items": line_items,
-            "metadata": {
-                **build_square_metadata(canonical),
-                "mileageFee": str(distance_charge),
-                "distance": str(data.get("distance", 0))
+            "location_id": os.getenv("SQUARE_LOCATION_ID"),
+            "customer_id": sq_cust_id,
+            "line_items": [{
+                "name": "Buzzy's Party Rental Deposit (35%)",
+                "quantity": "1",
+                "base_price_money": {"amount": int(pricing["deposit"] * 100), "currency": "USD"}
+            }],
+            "metadata": { 
+                "booking_id": booking_id,
+                "mileageFee": str(data.get("mileageFee", 0)) 
             },
-            
-            "note": (
-                f"BookingID: {booking_id} | "
-                f"Customer: {customer_name} | "
-                f"Items: {', '.join(item_summary_list)} | "
-                f"Date: {booking_date} | "
-                f"Address: {delivery_address_display} | "
-                f"Total: ${pricing['total']:.2f} | "
-                f"Signed: {signature}"
-            ),
+            "note": f"BookingID: {booking_id} | Date: {booking_date} | Items: {item_summary}"
         },
         "checkout_options": {
-            "redirect_url": redirect_url,
-            "ask_for_shipping_address": False,
-            "enable_tipping": True,
-            "merchant_support_email": "buzzysentertainment@gmail.com",
+            "redirect_url": "https://www.buzzys.org/booking-success",
             "allow_tipping": True,
-            "display_return_shipping_label": False
-        },
+            "enable_tipping": True
+        }
     }
-    
-    if save_card_requested:
-        pass
 
-    result = client.checkout.create_payment_link(body)
+    checkout_res = client.checkout.create_payment_link(body)
+    if "errors" in checkout_res.body:
+        raise HTTPException(status_code=500, detail="Square Link Generation Failed")
 
-    if "errors" in result.body:
-        print("SQUARE ERRORS:", result.body['errors'])
-        raise HTTPException(status_code=500, detail="Square checkout failed")
+    checkout_url = checkout_res.body["payment_link"]["url"]
 
-    payment_link = result.body.get("payment_link", {})
-    checkout_url = payment_link.get("url")
-
+    # 6. Save Final Booking Record
     booking_record = {
         "booking_id": booking_id,
         "name": customer_name,
         "email": customer_email,
         "phone": customer_phone,
         "date": booking_date,
-        "deliveryTime": delivery_time,
-        "pickupTime": pickup_time,
-        "overnight": overnight,
         "items": cart_items,
-        "signature": signature,
-        "damageWaiver": damage_waiver_opt,
-        "referral_type": referral_type,
+        "address": delivery_address_display,
         "pricing_breakdown": pricing,
         "deposit": pricing["deposit"],
         "remaining": pricing["remaining"],
-        "saveCardForAutopay": save_card_requested,
-        "address": delivery_address_display,
+        "saveCardForAutopay": data.get("saveCardForAutopay", False),
         "checkout_url": checkout_url,
+        "square_customer_id": sq_cust_id,
         "created_at": datetime.utcnow().isoformat(),
         "paymentStatus": "pending",
-        "contractStatus": "pending",
-        "status": "active",
+        "status": "active"
     }
 
     db.collection("bookings").document(booking_id).set(booking_record)
-    
-    email_data = build_resend_params(canonical, "admin_checkout_started")
-    email_data.setdefault("name", customer_name)
-    email_data.setdefault("email", customer_email)
-    email_data.setdefault("phone", customer_phone)
-    email_data.setdefault("date", booking_date)
-    email_data.setdefault("subtotal", pricing["subtotal"]) 
-    email_data.setdefault("deposit", pricing["deposit"]) 
-    email_data.setdefault("remaining", pricing["remaining"])
-    email_data.setdefault("waiverFee", pricing.get("waiver", 0))
-    email_data.setdefault("checkout_url", checkout_url)
-    email_data.setdefault("items", ", ".join(item_summary_list))
 
-    # Admin Email Alert
+    # 7. Admin Alert
     send_email_from_file(
         to=["buzzysentertainment@gmail.com", "kandy.stamey@gmail.com"],
         template_name="admin_checkout_started.html",
         subject="Customer Started Checkout",
-        params=email_data,
+        params={**booking_record, "total": f"${pricing['total']:.2f}"}
     )
 
     return {"checkoutUrl": checkout_url}
 
 # ---------------------------------------------------------
-# LIFECYCLE AUTOMATION
-# ---------------------------------------------------------
-
-@router.post("/automate-lifecycle")
-def automate_lifecycle(request: Request):
-    """
-    Automated processing for:
-    1. Autopay (2 days before event)
-    2. Reminders (Day of event)
-    3. Reengagement (Day after event)
-    """
-    cron_key = request.headers.get("X-Cron-Auth")
-    if cron_key != os.getenv("CRON_SECRET_KEY"):
-        raise HTTPException(status_code=403, detail="Unauthorized")
-        
-    today_dt = datetime.utcnow()
-    today_str = today_dt.strftime("%Y-%m-%d")
-    target_date_autopay = (today_dt + timedelta(days=2)).strftime("%Y-%m-%d")
-    yesterday_str = (today_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
-    
-    # --- 1. AUTOPAY BLOCK ---
-    autopay_docs = db.collection("bookings")\
-            .where("date", "==", target_date_autopay)\
-            .where("paymentStatus", "==", "deposit_paid")\
-            .where("saveCardForAutopay", "==", True)\
-            .stream()
-    
-    autopay_results = []
-    for doc in autopay_docs:
-        booking = doc.to_dict()
-        cust_id = booking.get("square_customer_id")
-        src_id = booking.get("square_source_id") 
-        remaining = booking.get("remaining", 0)
-        
-        if cust_id and src_id and remaining > 0:
-            try:
-                payment_body = {
-                    "source_id": src_id,
-                    "idempotency_key": str(uuid.uuid4()),
-                    "amount_money": {
-                        "amount": int(float(remaining) * 100), 
-                        "currency": "USD"
-                    },
-                    "customer_id": cust_id,
-                    "note": f"Autopay Final Balance | Booking: {booking.get('booking_id')}"
-                }
-                result = client.payments.create_payment(payment_body)
-                
-                if "errors" not in result.body:
-                    doc.reference.update({"paymentStatus": "balance_paid"})
-                    booking["paymentStatus"] = "balance_paid"
-                    handle_balance_paid(booking)
-                    autopay_results.append(f"SUCCESS: {booking.get('booking_id')}")
-                else:
-                    handle_payment_declined(booking)
-                    autopay_results.append(f"FAILED (Square Error): {booking.get('booking_id')}")
-            except Exception as e:
-                print(f"Autopay Exception: {e}")
-                handle_payment_declined(booking)
-
-    # --- 2. TODAY REMINDERS BLOCK ---
-    today_docs = db.collection("bookings").where("date", "==", today_str).where("status", "==", "active").stream()
-    reminders_sent = []
-    for doc in today_docs:
-        booking = doc.to_dict()
-        handle_event_reminder(booking)
-        reminders_sent.append(booking.get("booking_id"))
-                
-    # --- 3. REENGAGEMENT BLOCK ---
-    yesterday_docs = db.collection("bookings").where("date", "==", yesterday_str).stream()
-    reengagement_sent = []
-    for doc in yesterday_docs:
-        booking = doc.to_dict()
-        # Only reengage if the event actually happened
-        if booking.get("paymentStatus") in ["deposit_paid", "balance_paid"]:
-            send_anniversary_reminders(booking) 
-            reengagement_sent.append(booking.get("booking_id"))
-
-    return {
-        "status": "success", 
-        "autopay_count": len(autopay_results),
-        "autopay_details": autopay_results,
-        "reminders": reminders_sent, 
-        "reengagement": reengagement_sent
-    }
-
-# ---------------------------------------------------------
-# UPDATE & INDIVIDUAL ACTIONS
+# WEBHOOKS
 # ---------------------------------------------------------
 
 @router.post("/webhooks/square")
 async def square_webhook(request: Request):
-    """
-    Square Webhook Listener for Payments and Invoices.
-    """
-    # 1. OFFICIAL SIGNATURE VERIFICATION
-    # Get the signature from Square's header
     square_signature = request.headers.get("x-square-hmacsha256-signature")
-    
-    # Get your secret key from Render Environment Variables
-    webhook_signature_key = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY")
-    
-    # IMPORTANT: This must match your Square Developer Dashboard URL exactly
+    webhook_secret = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY")
     notification_url = "https://buzzys-backend.onrender.com/book/webhooks/square"
     
-    # Get the raw body bytes for verification
     raw_body = await request.body()
-    body_text = raw_body.decode("utf-8")
-    
-    # Use the official Square SDK utility (much more reliable than manual HMAC)
-    is_valid = is_valid_webhook_event_signature(
-        body_text,
-        square_signature,
-        webhook_signature_key,
-        notification_url
-    )
-
-    if not is_valid:
-        print("WEBHOOK ERROR: Signature Verification Failed. Check your URL or Secret Key.")
-        # If testing and desperate, you can temporarily 'pass' here, but keep it for production safety!
+    if not is_valid_webhook_event_signature(raw_body.decode("utf-8"), square_signature, webhook_secret, notification_url):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    # 2. PARSE PAYLOAD
     payload = await request.json()
-    event_type = payload.get("type", "")
+    event_type = payload.get("type")
     data_object = payload.get("data", {}).get("object", {})
-    
-    # 3. HANDLE PAYMENT UPDATES (Initial Deposit / Card Capture)
+
     if event_type == "payment.updated":
         payment = data_object.get("payment", {})
-        status = payment.get("status")
-        client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
-        
-        customer_id = payment.get("customer_id")
-        source_id = payment.get("source_id")
-        order_id = payment.get("order_id")
-        booking_id = None
-        
-        # Retrieve Order to find the BookingID from the Note field
-        if order_id:
-            try:
-                order_result = client.orders.retrieve_order(order_id=order_id)
-                if "errors" not in order_result.body:
-                    order = order_result.body.get("order", {})
-                    note = order.get("note", "") or ""
-                    if "BookingID:" in note:
-                        part = note.split("BookingID:")[1]
-                        booking_id = part.split("|")[0].strip()
-            except Exception as e:
-                print("FAILED TO RETRIEVE ORDER:", e)
-        
-        if booking_id:
-            doc_ref = db.collection("bookings").document(booking_id)
-            doc = doc_ref.get()
-            if doc.exists:
-                booking = doc.to_dict()
-                if status == "COMPLETED" and booking.get("paymentStatus") != "deposit_paid":
-                    # Store SourceID for future Autopay logic
-                    doc_ref.update({
+        if payment.get("status") == "COMPLETED":
+            client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
+            order_res = client.orders.retrieve_order(payment.get("order_id"))
+            order = order_res.body.get("order", {})
+            
+            # Extract booking_id from metadata OR manual note parsing
+            booking_id = order.get("metadata", {}).get("booking_id")
+            if not booking_id and "BookingID:" in order.get("note", ""):
+                booking_id = order["note"].split("BookingID:")[1].split("|")[0].strip()
+
+            if booking_id:
+                doc_ref = db.collection("bookings").document(booking_id)
+                booking = doc_ref.get().to_dict()
+                
+                if booking and booking.get("paymentStatus") != "deposit_paid":
+                    update_payload = {
                         "paymentStatus": "deposit_paid",
-                        "square_customer_id": customer_id,
-                        "square_source_id": source_id
-                    })                    
+                        "square_source_id": payment.get("source_id"),
+                        "square_order_id": payment.get("order_id")
+                    }
+                    doc_ref.update(update_payload)
+                    booking.update(update_payload)
                     
-                    booking["paymentStatus"] = "deposit_paid"
-                    
-                    try:
-                        if booking.get("google_event_id"):
-                            update_booking_event(booking["google_event_id"], booking)
-                    except Exception as e:
-                        print("GOOGLE CALENDAR UPDATE ERROR:", e)
-                        
-                    
-                    
-                    # THIS TRIGGERS THE NEWLY CORRECTED EMAIL TEMPLATE
                     handle_deposit_received(booking)
-                    
-                elif status in ("FAILED", "CANCELED"):
-                    doc_ref.update({"paymentStatus": "failed"})
-                    booking["paymentStatus"] = "failed"
-                    handle_payment_declined(booking)
+                    try:
+                        create_booking_event(booking)
+                    except Exception as e:
+                        print(f"Calendar Sync Error: {e}")
 
-    # 4. HANDLE INVOICE UPDATES (Manual Balance Payments)
-    if event_type == "invoice.updated":
-        invoice = data_object.get("invoice", {})
-        status = invoice.get("status")
-        invoice_id = invoice.get("id")
-        
-        query = db.collection("bookings").where("invoice_id", "==", invoice_id).limit(1).stream()
-        booking_doc = None
-        for d in query:
-            booking_doc = d
-            break
-            
-        if booking_doc:
-            booking = booking_doc.to_dict()
-            doc_ref = db.collection("bookings").document(booking["booking_id"])
-            if status == "PAID":
-                doc_ref.update({"paymentStatus": "balance_paid"})
-                booking["paymentStatus"] = "balance_paid"
     return {"status": "ok"}
-@router.post("/webhooks/resend")
-async def resend_webhook(request: Request):
-    """
-    Resend Webhook Listener: Updates Buzzy/Firebase when 
-    email status changes (Delivered, Bounced, etc.)
-    """
-    # 1. Verify Signature
-    secret = os.getenv("RESEND_WEBHOOK_SECRET")
-    if not secret:
-        raise HTTPException(status_code=500, detail="Webhook secret not configured")
 
-    headers = request.headers
-    payload = await request.body()
-    
-    wh = Webhook(secret)
-    try:
-        # This ensures the ping actually came from Resend
-        evt = wh.verify(payload, headers)
-    except WebhookVerificationError:
-        print("RESEND WEBHOOK ERROR: Invalid Signature")
-        raise HTTPException(status_code=400, detail="Invalid signature")
-
-    # 2. Extract Data
-    event_type = evt.get("type")
-    data = evt.get("data", {})
-    email_id = data.get("email_id")
-    to_email = data.get("to")[0] if data.get("to") else "Unknown"
-
-    print(f"RESEND EVENT: {event_type} for {to_email} (ID: {email_id})")
-
-    # 3. Update Firebase / Buzzy
-    # We find the booking where the last email sent matches this ID
-    bookings_ref = db.collection("bookings")
-    query = bookings_ref.where("last_email_id", "==", email_id).limit(1).stream()
-    
-    booking_doc = None
-    for d in query:
-        booking_doc = d
-        break
-
-    if booking_doc:
-        doc_ref = bookings_ref.document(booking_doc.id)
+@router.post("/automate-lifecycle")
+def automate_lifecycle(request: Request):
+    if request.headers.get("X-Cron-Auth") != os.getenv("CRON_SECRET_KEY"):
+        raise HTTPException(status_code=403)
         
-        if event_type == "email.delivered":
-            doc_ref.update({"emailStatus": "Delivered ✅"})
-        elif event_type == "email.bounced":
-            doc_ref.update({"emailStatus": "Bounced ❌", "status": "action_required"})
-        elif event_type == "email.complained":
-            doc_ref.update({"emailStatus": "Marked as Spam ⚠️"})
-            
-    return {"status": "ok"}             
-       
+    today_dt = datetime.utcnow()
+    target_autopay = (today_dt + timedelta(days=2)).strftime("%Y-%m-%d")
+    
+    client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
+    
+    # 1. Autopay (2 days before)
+    autopay_docs = db.collection("bookings")\
+        .where("date", "==", target_autopay)\
+        .where("paymentStatus", "==", "deposit_paid")\
+        .where("saveCardForAutopay", "==", True).stream()
+
+    for doc in autopay_docs:
+        b = doc.to_dict()
+        if b.get("square_customer_id") and b.get("square_source_id"):
+            res = client.payments.create_payment({
+                "source_id": b["square_source_id"],
+                "customer_id": b["square_customer_id"],
+                "idempotency_key": str(uuid.uuid4()),
+                "amount_money": {"amount": int(b["remaining"] * 100), "currency": "USD"},
+                "note": f"Autopay Final Balance - Booking {b['booking_id']}"
+            })
+            if "errors" not in res.body:
+                doc.reference.update({"paymentStatus": "balance_paid"})
+                handle_balance_paid(b)
+            else:
+                handle_payment_declined(b)
+
+    # 2. Event Reminders (Day of)
+    today_str = today_dt.strftime("%Y-%m-%d")
+    reminder_docs = db.collection("bookings").where("date", "==", today_str).where("status", "==", "active").stream()
+    for doc in reminder_docs:
+        handle_event_reminder(doc.to_dict())
+
+    return {"status": "success"}
+
+@router.get("/all")
+def get_all_bookings():
+    docs = db.collection("bookings").stream()
+    cleaned = []
+    for doc in docs:
+        b = doc.to_dict()
+        b["id"] = doc.id
+        cleaned.append(b)
+    cleaned.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return cleaned

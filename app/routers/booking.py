@@ -269,6 +269,23 @@ def create_checkout(data: dict):
     is_valid, missing = validate_payload(canonical)
     if not is_valid:
         print("ROOT VALIDATION WARNING — Missing:", missing)
+        
+    raw_address = data.get("address") or {}
+    
+    if isinstance(raw_address, dict):
+        address_input = raw_address
+    else:
+        address_input = {
+            "address_line_1": str(raw_address),
+            "locality": data.get("city", ""),
+            "administrative_district_level_1": data.get("state", ""),
+            "postal_code": data.get("zip", "")
+        }
+    delivery_address_display = (   
+        f"{address_input.get('address_line_1', '')}, {address_input.get('locality', '')}"
+        if isinstance(raw_address, dict) else str(raw_address)
+    )    
+     
     """
     Generates a Square Payment Link and prepares the finalized booking record.
     """

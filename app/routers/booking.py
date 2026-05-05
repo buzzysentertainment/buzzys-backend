@@ -192,28 +192,80 @@ async def create_checkout(data: dict):
     # 5. Create Payment Link for Deposit
     item_summary = ", ".join([i.get("title") or i.get("name", "Item") for i in cart_items])
     
+    sq_line_items = []
+    for item in cart_items:
+        price_val = item.get("price", 0)
+        if isinstance(price_val, str):
+            price_val = float(price_val.replace("$", "").replace(",", ""))
+        
+        sq_line_items.append({
+            "name": item.get("title") or item.get("name", "Party Rental Item"),
+            "quantity": "1",
+            "base_price_money": {"amount": int(price_val * 100), "currency": "USD"}
+        })
+        
+    if pricing.get("waiver", 0) > 0:
+        sq_line_items.append({
+            "name": "Damage Waiver Fee (8%)",
+            "quantity": "1",
+            "base_price_money": {"amount": int(pricing["waiver"] * 100), "currency": "USD"}
+        })
+
+    if float(data.get("mileageFee", 0)) > 0:
+        sq_line_items.append({
+            "name": "Delivery & Mileage Fee",
+            "quantity": "1",
+            "base_price_money": {"amount": int(float(data["mileageFee"]) * 100), "currency": "USD"}
+        })
+
+
+    if pricing.get("tax", 0) > 0:
+        sq_line_items.append({
+            "name": "Sales Tax (7%)",
+            "quantity": "1",
+            "base_price_money": {"amount": int(pricing["tax"] * 100), "currency": "USD"}
+        })
+
+    if float(data.get("staffFee", 0)) > 0:
+        sq_line_items.append({
+            "name": "Staffing/Service Fee",
+            "quantity": "1",
+            "base_price_money": {"amount": int(float(data["staffFee"]) * 100), "currency": "USD"}
+        })    
+    
+    
     body = {
         "idempotency_key": str(uuid.uuid4()),
         "order": {
             "location_id": os.getenv("SQUARE_LOCATION_ID"),
             "customer_id": sq_cust_id,
-            "line_items": [{
-                "name": "Buzzy's Party Rental Deposit (35%)",
-                "quantity": "1",
-                "base_price_money": {"amount": int(pricing["deposit"] * 100), "currency": "USD"}
-            }],
-            "metadata": { 
-                "booking_id": booking_id,
-                "mileageFee": str(data.get("mileageFee", 0)) 
-            },
-            "note": f"BookingID: {booking_id} | Date: {booking_date} | Items: {item_summary}"
+            "line_items": sq_line_items,
+            "payment_requests": [
+                {
+                    "request_type": "DEPOSIT",
+                    "fixed_amount_money": {
+                        "amount": int(round(pricing["deposit"] * 100)),
+                        "currency": "USD"
+                    },
+                    "due_date": datetime.utcnow().strftime("%Y-%m-%d")
+                },
+                {
+                    "request_type": "BALANCE",
+                    "due_date": (datetime.strptime(booking_date, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
+                }
+            ],
+            "metadata": {
+                "booking_id": booking_id
+            }
         },
         "checkout_options": {
             "redirect_url": "https://www.buzzys.org/booking-success",
             "allow_tipping": True,
             "enable_tipping": True
         }
-    }
+    }    
+              
+                
 
     checkout_res = client.checkout.create_payment_link(body)
     if "errors" in checkout_res.body:

@@ -233,27 +233,35 @@ async def create_checkout(data: dict):
             "base_price_money": {"amount": int(float(data["staffFee"]) * 100), "currency": "USD"}
         })    
     
+    payment_requests = [
+        {
+            "uid": "deposit_due_now",
+            "request_type": "DEPOSIT",
+            "fixed_amount_money": {
+                "amount": int(round(pricing["deposit"] * 100)),
+                "currency": "USD"
+            },
+            "due_date": datetime.utcnow().strftime("%Y-%m-%d")
+        },
+        {
+            "uid": "balance_due_later",
+            "request_type": "BALANCE",
+            "fixed_amount_money": {
+                "amount": int(round(pricing["remaining"] * 100)),
+                "currency": "USD"
+            },
+            "due_date": (datetime.strptime(booking_date, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
+        }
+    ]
     
+            
     body = {
         "idempotency_key": str(uuid.uuid4()),
         "order": {
             "location_id": os.getenv("SQUARE_LOCATION_ID"),
             "customer_id": sq_cust_id,
             "line_items": sq_line_items,
-            "payment_requests": [
-                {
-                    "request_type": "DEPOSIT",
-                    "fixed_amount_money": {
-                        "amount": int(round(pricing["deposit"] * 100)),
-                        "currency": "USD"
-                    },
-                    "due_date": datetime.utcnow().strftime("%Y-%m-%d")
-                },
-                {
-                    "request_type": "BALANCE",
-                    "due_date": (datetime.strptime(booking_date, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
-                }
-            ],
+            "payment_requests": payment_requests,
             "metadata": {
                 "booking_id": booking_id
             }
@@ -261,14 +269,11 @@ async def create_checkout(data: dict):
         "checkout_options": {
             "redirect_url": "https://www.buzzys.org/booking-success",
             "allow_tipping": True,
-            "enable_tipping": True
-        },
-        "pre_populated_data": {
-            "amount_to_pay_as_cents": int(round(pricing["deposit"] * 100))
+            "enable_tipping": True,
+            "payment_request_id": "deposit_due_now"
         }
+ 
     }    
-              
-                
 
     checkout_res = client.checkout.create_payment_link(body)
     if "errors" in checkout_res.body:

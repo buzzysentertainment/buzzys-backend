@@ -263,25 +263,10 @@ async def create_checkout(data: dict):
                 "currency": "USD"
             },
             "due_date": datetime.utcnow().strftime("%Y-%m-%d")
-        },
-        {
-            "uid": "balance_due_later",
-            "request_type": "BALANCE",
-            "fixed_amount_money": {
-                "amount": int(round(pricing["remaining"] * 100)),
-                "currency": "USD"
-            },
-            "due_date": (datetime.strptime(booking_date, "%Y-%m-%d") - timedelta(days=2)).strftime("%Y-%m-%d")
-        }
-    ]
-    
-    remaining_amount_formatted = f"${pricing['remaining']:.2f}"
-    sq_line_items.append({
-        "name": f"Remaining Balance Due 2 Days Before Event Date ({remaining_amount_formatted})",
-        "quantity": "1",
-        "base_price_money": {"amount": 0, "currency": "USD"} # Set to $0 so it doesn't add to the total now
-    })    
-    
+    }]        
+
+   
+  
             
     body = {
         "idempotency_key": str(uuid.uuid4()),

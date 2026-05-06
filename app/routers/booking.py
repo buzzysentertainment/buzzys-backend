@@ -262,6 +262,9 @@ async def create_checkout(data: dict):
             "redirect_url": "https://www.buzzys.org/booking-success",
             "allow_tipping": True,
             "enable_tipping": True
+        },
+        "pre_populated_data": {
+            "amount_to_pay_as_cents": int(round(pricing["deposit"] * 100))
         }
     }    
               
@@ -348,6 +351,40 @@ async def square_webhook(request: Request):
                     doc_ref.update(update_payload)
                     booking.update(update_payload)
                     
+                    handle_deposit_received(booking)
+                    
+                    try:
+                        due_dt = datetime.strptime(booking['date'], "%Y-%m-%d") - timedelta(days=2)
+                        due_str = due_dt.strftime("%Y-%m-%d")
+                        
+                        invoice_body = {
+                            "invoice": {
+                                "location_id": os.getenv("SQUARE_LOCATION_ID"),
+                                "title": f"Remaining Balance - Booking {booking_id}",
+                                "order_id": payment.get("order_id"),
+                                "primary_recipient": {
+                                    "customer_id": booking.get("square_customer_id")
+                                },
+                                "payment_requests": [
+                                    {
+                                        "request_type": "BALANCE",
+                                        "due_date": due_str,
+                                        "fixed_amount_money": {
+                                            "amount": int(round(booking["remaining"] * 100)),
+                                            "currency": "USD"
+                                        }
+                                    } 
+                                ],
+                                "delivery_method": "EMAIL"
+                            }
+                        }    
+                        
+                        create_res = client.invoices.create_invoice(invoice_body)
+                        if "errors" not in create_res.body:
+                            inv = create_res.body["invoice"]
+                            client.invoices.publish_invoice(inv["id"], {"version": inv["version"]})
+                    except Exception as inv_err:
+                        print(f"Square Invoice Logic Error: {inv_err}")
                     handle_deposit_received(booking)
                     try:
                         create_booking_event(booking)

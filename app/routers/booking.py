@@ -204,6 +204,9 @@ async def create_checkout(data: dict):
             "base_price_money": {"amount": int(price_val * 100), "currency": "USD"}
         })
         
+ 
+        
+        
     if pricing.get("waiver", 0) > 0:
         sq_line_items.append({
             "name": "Damage Waiver Fee (8%)",
@@ -233,6 +236,24 @@ async def create_checkout(data: dict):
             "base_price_money": {"amount": int(float(data["staffFee"]) * 100), "currency": "USD"}
         })    
     
+        sq_line_items.append({
+            "name": "---------------------------",
+            "quantity": "1",
+            "base_price_money": {"amount": 0, "currency": "USD"}
+        })
+        
+        sq_line_items.append({
+            "name": f"DEPOSIT DUE NOW: ${pricing['deposit']:.2f}",
+            "quantity": "1",
+            "base_price_money": {"amount": 0, "currency": "USD"}
+        })
+        
+        sq_line_items.append({
+            "name": f"BALANCE DUE LATER: ${pricing['remaining']:.2f}",
+            "quantity": "1",
+            "base_price_money": {"amount": 0, "currency": "USD"}
+        })
+        
     payment_requests = [
         {
             "uid": "deposit_due_now",

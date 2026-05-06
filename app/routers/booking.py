@@ -275,6 +275,13 @@ async def create_checkout(data: dict):
         }
     ]
     
+    remaining_amount_formatted = f"${pricing['remaining']:.2f}"
+    sq_line_items.append({
+        "name": f"Remaining Balance Due 2 Days Before Event Date ({remaining_amount_formatted})",
+        "quantity": "1",
+        "base_price_money": {"amount": 0, "currency": "USD"} # Set to $0 so it doesn't add to the total now
+    })    
+    
             
     body = {
         "idempotency_key": str(uuid.uuid4()),

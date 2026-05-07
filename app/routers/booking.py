@@ -8,6 +8,7 @@ from svix.webhooks import Webhook, WebhookVerificationError
 from square.client import Client
 from square.utilities.webhooks_helper import is_valid_webhook_event_signature
 from datetime import datetime, timedelta
+import stripe
 import os
 import uuid
 
@@ -22,6 +23,9 @@ from app.triggers.on_reengagement import send_anniversary_reminders
 
 router = APIRouter(prefix="/book", tags=["booking"])
 
+# Initialize Stripe globally
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY") # This should be your sk_live_... key
+endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET") # Your whsec_... key
 # ---------------------------------------------------------
 # MODELS & SCHEMAS
 # ---------------------------------------------------------
@@ -135,10 +139,9 @@ async def validate_coupon(data: dict):
 @router.post("/create-checkout")
 async def create_checkout(data: dict):
     """
-    Refined checkout flow: Creates Square customer, calculates exact pricing,
-    saves pending record, and generates a Payment Link.
+    Refined checkout flow: Creates Stripe customer, calculates exact pricing,
+    saves pending record, and generates a Stripe Checkout Session.
     """
-    client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
     canonical = normalize_payload(data)
     booking_id = str(uuid.uuid4())
     
@@ -148,20 +151,14 @@ async def create_checkout(data: dict):
     customer_phone = data.get("customerPhone") or data.get("phone") or canonical.get("phone") or ""
     booking_date = data.get("eventDate") or data.get("date") or canonical.get("date") or ""
 
-    # 2. Address Handling
+    # 2. Address Display (For Firebase Records)
     raw_addr = data.get("address") or {}
     if isinstance(raw_addr, dict):
         addr_line_1 = raw_addr.get("address_line_1", "")
         city = raw_addr.get("locality", data.get("city", ""))
         delivery_address_display = f"{addr_line_1}, {city}"
-        sq_address = {
-            "address_line_1": addr_line_1,
-            "locality": city,
-            "postal_code": raw_addr.get("postal_code", data.get("zip", ""))
-        }
     else:
         delivery_address_display = str(raw_addr)
-        sq_address = {"address_line_1": delivery_address_display}
 
     # 3. Pricing Calculation
     cart_items = data.get("cart") or data.get("items") or []
@@ -178,238 +175,119 @@ async def create_checkout(data: dict):
         promo_percent=float(data.get("percentOff", 0))
     )
 
-    # 4. Create Square Customer (Required for Autopay/Card Capture)
-    cust_res = client.customers.create_customer({
-        "given_name": customer_name,
-        "email_address": customer_email,
-        "phone_number": customer_phone,
-        "address": sq_address
-    })
-    if "errors" in cust_res.body:
-        raise HTTPException(status_code=400, detail="Square Customer creation failed")
-    sq_cust_id = cust_res.body['customer']['id']
-
-    # 5. Create Payment Link for Deposit
-    item_summary = ", ".join([i.get("title") or i.get("name", "Item") for i in cart_items])
-    
-    sq_line_items = []
-    for item in cart_items:
-        price_val = item.get("price", 0)
-        if isinstance(price_val, str):
-            price_val = float(price_val.replace("$", "").replace(",", ""))
+    try:
+        # 4. Create Stripe Customer
+        customer = stripe.Customer.create(
+            name=customer_name,
+            email=customer_email,
+            phone=customer_phone,
+            metadata={"booking_id": booking_id}
+        )
         
-        sq_line_items.append({
-            "name": item.get("title") or item.get("name", "Party Rental Item"),
-            "quantity": "1",
-            "base_price_money": {"amount": int(price_val * 100), "currency": "USD"}
-        })
-        
- 
-        
-        
-    if pricing.get("waiver", 0) > 0:
-        sq_line_items.append({
-            "name": "Damage Waiver Fee (8%)",
-            "quantity": "1",
-            "base_price_money": {"amount": int(pricing["waiver"] * 100), "currency": "USD"}
-        })
-
-    if float(data.get("mileageFee", 0)) > 0:
-        sq_line_items.append({
-            "name": "Delivery & Mileage Fee",
-            "quantity": "1",
-            "base_price_money": {"amount": int(float(data["mileageFee"]) * 100), "currency": "USD"}
-        })
-
-
-    if pricing.get("tax", 0) > 0:
-        sq_line_items.append({
-            "name": "Sales Tax (7%)",
-            "quantity": "1",
-            "base_price_money": {"amount": int(pricing["tax"] * 100), "currency": "USD"}
-        })
-
-    if float(data.get("staffFee", 0)) > 0:
-        sq_line_items.append({
-            "name": "Staffing/Service Fee",
-            "quantity": "1",
-            "base_price_money": {"amount": int(float(data["staffFee"]) * 100), "currency": "USD"}
-        })    
-    
-        sq_line_items.append({
-            "name": "---------------------------",
-            "quantity": "1",
-            "base_price_money": {"amount": 0, "currency": "USD"}
-        })
-        
-        sq_line_items.append({
-            "name": f"DEPOSIT DUE NOW: ${pricing['deposit']:.2f}",
-            "quantity": "1",
-            "base_price_money": {"amount": 0, "currency": "USD"}
-        })
-        
-        sq_line_items.append({
-            "name": f"BALANCE DUE LATER: ${pricing['remaining']:.2f}",
-            "quantity": "1",
-            "base_price_money": {"amount": 0, "currency": "USD"}
-        })
-        
-    payment_requests = [
-        {
-            "uid": "deposit_due_now",
-            "request_type": "DEPOSIT",
-            "fixed_amount_money": {
-                "amount": int(round(pricing["deposit"] * 100)),
-                "currency": "USD"
+        # 5. Create Stripe Checkout Session
+        # 'setup_future_usage' allows us to charge the balance 2 days before the event
+        session = stripe.checkout.Session.create(
+            customer=customer.id,
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'usd',
+                    'product_data': {
+                        'name': f"Booking Deposit - {booking_date}",
+                        'description': f"Buzzy's Inflatables Rental ({len(cart_items)} items)",
+                    },
+                    'unit_amount': int(round(pricing['deposit'] * 100)), # Stripe uses cents
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            payment_intent_data={
+                'setup_future_usage': 'off_session', 
+                'metadata': {'booking_id': booking_id}
             },
-            "due_date": datetime.utcnow().strftime("%Y-%m-%d")
-    }]        
+            success_url="https://www.buzzys.org/booking-success?id=" + booking_id,
+            cancel_url="https://www.buzzys.org/cart",
+            metadata={'booking_id': booking_id}
+        )
 
-   
-  
-            
-    body = {
-        "idempotency_key": str(uuid.uuid4()),
-        "order": {
-            "location_id": os.getenv("SQUARE_LOCATION_ID"),
-            "customer_id": sq_cust_id,
-            "line_items": sq_line_items,
-            "payment_requests": payment_requests,
-            "metadata": {
-                "booking_id": booking_id
-            }
-        },
-        "checkout_options": {
-            "redirect_url": "https://www.buzzys.org/booking-success",
-            "allow_tipping": True,
-            "enable_tipping": True,
-            "payment_request_id": "deposit_due_now"
+        # 6. Save Final Booking Record to Firebase
+        booking_record = {
+            "booking_id": booking_id,
+            "name": customer_name,
+            "email": customer_email,
+            "phone": customer_phone,
+            "date": booking_date,
+            "items": cart_items,
+            "address": delivery_address_display,
+            "pricing_breakdown": pricing,
+            "deposit": pricing["deposit"],
+            "remaining": pricing["remaining"],
+            "saveCardForAutopay": data.get("saveCardForAutopay", True),
+            "checkout_url": session.url,
+            "stripe_customer_id": customer.id,
+            "created_at": datetime.utcnow().isoformat(),
+            "paymentStatus": "pending",
+            "status": "active"
         }
- 
-    }    
 
-    checkout_res = client.checkout.create_payment_link(body)
-    if "errors" in checkout_res.body:
-        raise HTTPException(status_code=500, detail="Square Link Generation Failed")
+        db.collection("bookings").document(booking_id).set(booking_record)
 
-    checkout_url = checkout_res.body["payment_link"]["url"]
+        # 7. Admin Alert
+        send_email_from_file(
+            to=["buzzysentertainment@gmail.com", "kandy.stamey@gmail.com"],
+            template_name="admin_checkout_started.html",
+            subject="Customer Started Checkout (Stripe)",
+            params={**booking_record, "total": f"${pricing['total']:.2f}"}
+        )
 
-    # 6. Save Final Booking Record
-    booking_record = {
-        "booking_id": booking_id,
-        "name": customer_name,
-        "email": customer_email,
-        "phone": customer_phone,
-        "date": booking_date,
-        "items": cart_items,
-        "address": delivery_address_display,
-        "pricing_breakdown": pricing,
-        "deposit": pricing["deposit"],
-        "remaining": pricing["remaining"],
-        "saveCardForAutopay": data.get("saveCardForAutopay", False),
-        "checkout_url": checkout_url,
-        "square_customer_id": sq_cust_id,
-        "created_at": datetime.utcnow().isoformat(),
-        "paymentStatus": "pending",
-        "status": "active"
-    }
+        return {"checkoutUrl": session.url}
 
-    db.collection("bookings").document(booking_id).set(booking_record)
-
-    # 7. Admin Alert
-    send_email_from_file(
-        to=["buzzysentertainment@gmail.com", "kandy.stamey@gmail.com"],
-        template_name="admin_checkout_started.html",
-        subject="Customer Started Checkout",
-        params={**booking_record, "total": f"${pricing['total']:.2f}"}
-    )
-
-    return {"checkoutUrl": checkout_url}
+    except Exception as e:
+        print(f"Stripe Session Error: {e}")
+        raise HTTPException(status_code=500, detail="Checkout Generation Failed")
 
 # ---------------------------------------------------------
 # WEBHOOKS
 # ---------------------------------------------------------
+@router.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get('stripe-signature')
 
-@router.post("/webhooks/square")
-async def square_webhook(request: Request):
-    square_signature = request.headers.get("x-square-hmacsha256-signature")
-    webhook_secret = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY")
-    notification_url = "https://buzzys-backend.onrender.com/book/webhooks/square"
-    
-    raw_body = await request.body()
-    if not is_valid_webhook_event_signature(raw_body.decode("utf-8"), square_signature, webhook_secret, notification_url):
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
+    except Exception:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    payload = await request.json()
-    event_type = payload.get("type")
-    data_object = payload.get("data", {}).get("object", {})
-
-    if event_type == "payment.updated":
-        payment = data_object.get("payment", {})
-        if payment.get("status") == "COMPLETED":
-            client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
-            order_res = client.orders.retrieve_order(payment.get("order_id"))
-            order = order_res.body.get("order", {})
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
+        booking_id = session['metadata'].get('booking_id')
+        
+        # Retrieve the payment intent to get the payment method ID for later autopay
+        intent = stripe.PaymentIntent.retrieve(session.payment_intent)
+        
+        if booking_id:
+            doc_ref = db.collection("bookings").document(booking_id)
+            booking = doc_ref.get().to_dict()
             
-            # Extract booking_id from metadata OR manual note parsing
-            booking_id = order.get("metadata", {}).get("booking_id")
-            if not booking_id and "BookingID:" in order.get("note", ""):
-                booking_id = order["note"].split("BookingID:")[1].split("|")[0].strip()
-
-            if booking_id:
-                doc_ref = db.collection("bookings").document(booking_id)
-                booking = doc_ref.get().to_dict()
+            if booking and booking.get("paymentStatus") != "deposit_paid":
+                update_payload = {
+                    "paymentStatus": "deposit_paid",
+                    "stripe_payment_method_id": intent.payment_method,
+                    "stripe_payment_intent": intent.id
+                }
+                doc_ref.update(update_payload)
+                booking.update(update_payload)
                 
-                if booking and booking.get("paymentStatus") != "deposit_paid":
-                    update_payload = {
-                        "paymentStatus": "deposit_paid",
-                        "square_source_id": payment.get("source_id"),
-                        "square_order_id": payment.get("order_id")
-                    }
-                    doc_ref.update(update_payload)
-                    booking.update(update_payload)
-                    
-                    handle_deposit_received(booking)
-                    
-                    try:
-                        due_dt = datetime.strptime(booking['date'], "%Y-%m-%d") - timedelta(days=2)
-                        due_str = due_dt.strftime("%Y-%m-%d")
-                        
-                        invoice_body = {
-                            "invoice": {
-                                "location_id": os.getenv("SQUARE_LOCATION_ID"),
-                                "title": f"Remaining Balance - Booking {booking_id}",
-                                "order_id": payment.get("order_id"),
-                                "primary_recipient": {
-                                    "customer_id": booking.get("square_customer_id")
-                                },
-                                "payment_requests": [
-                                    {
-                                        "request_type": "BALANCE",
-                                        "due_date": due_str,
-                                        "fixed_amount_money": {
-                                            "amount": int(round(booking["remaining"] * 100)),
-                                            "currency": "USD"
-                                        }
-                                    } 
-                                ],
-                                "delivery_method": "EMAIL"
-                            }
-                        }    
-                        
-                        create_res = client.invoices.create_invoice(invoice_body)
-                        if "errors" not in create_res.body:
-                            inv = create_res.body["invoice"]
-                            client.invoices.publish_invoice(inv["id"], {"version": inv["version"]})
-                    except Exception as inv_err:
-                        print(f"Square Invoice Logic Error: {inv_err}")
-                    handle_deposit_received(booking)
-                    try:
-                        create_booking_event(booking)
-                    except Exception as e:
-                        print(f"Calendar Sync Error: {e}")
+                # Triggers
+                handle_deposit_received(booking)
+                try:
+                    create_booking_event(booking)
+                except Exception as e:
+                    print(f"Calendar Sync Error: {e}")
 
     return {"status": "ok"}
+
 
 @router.post("/automate-lifecycle")
 def automate_lifecycle(request: Request):
@@ -419,9 +297,7 @@ def automate_lifecycle(request: Request):
     today_dt = datetime.utcnow()
     target_autopay = (today_dt + timedelta(days=2)).strftime("%Y-%m-%d")
     
-    client = Client(access_token=os.getenv("SQUARE_ACCESS_TOKEN"), environment="production")
-    
-    # 1. Autopay (2 days before)
+    # 1. Stripe Autopay (2 days before)
     autopay_docs = db.collection("bookings")\
         .where("date", "==", target_autopay)\
         .where("paymentStatus", "==", "deposit_paid")\
@@ -429,18 +305,25 @@ def automate_lifecycle(request: Request):
 
     for doc in autopay_docs:
         b = doc.to_dict()
-        if b.get("square_customer_id") and b.get("square_source_id"):
-            res = client.payments.create_payment({
-                "source_id": b["square_source_id"],
-                "customer_id": b["square_customer_id"],
-                "idempotency_key": str(uuid.uuid4()),
-                "amount_money": {"amount": int(b["remaining"] * 100), "currency": "USD"},
-                "note": f"Autopay Final Balance - Booking {b['booking_id']}"
-            })
-            if "errors" not in res.body:
+        cust_id = b.get("stripe_customer_id")
+        pm_id = b.get("stripe_payment_method_id")
+
+        if cust_id and pm_id:
+            try:
+                stripe.PaymentIntent.create(
+                    amount=int(round(b["remaining"] * 100)),
+                    currency='usd',
+                    customer=cust_id,
+                    payment_method=pm_id,
+                    off_session=True, 
+                    confirm=True,
+                    description=f"Autopay Final Balance - Booking {b['booking_id']}",
+                    metadata={'booking_id': b['booking_id']}
+                )
                 doc.reference.update({"paymentStatus": "balance_paid"})
                 handle_balance_paid(b)
-            else:
+            except stripe.error.StripeError as e:
+                print(f"Autopay Failed for {b['booking_id']}: {e}")
                 handle_payment_declined(b)
 
     # 2. Event Reminders (Day of)
@@ -450,7 +333,8 @@ def automate_lifecycle(request: Request):
         handle_event_reminder(doc.to_dict())
 
     return {"status": "success"}
-
+    
+    
 @router.get("/all")
 def get_all_bookings():
     docs = db.collection("bookings").stream()

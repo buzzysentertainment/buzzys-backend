@@ -13,3 +13,4 @@ bcrypt
 squareup==36.0.0.20240417
 svix
 google-api-python-client
+stripe

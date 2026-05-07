@@ -72,7 +72,7 @@ def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_ch
     
     # 4. Final Split
     total_dollars = round(taxable_amount + tax_total + staff_fee, 2)
-    deposit = round(total_dollars * 0.35, 2)
+    deposit = 75.00
     remaining = round(total_dollars - deposit, 2)
     
     return {
@@ -194,7 +194,7 @@ async def create_checkout(data: dict):
                     'currency': 'usd',
                     'product_data': {
                         'name': f"Booking Deposit - {booking_date}",
-                        'description': f"Buzzy's Inflatables Rental ({len(cart_items)} items)",
+                        'description': f"Non-Refundable Deposit. Remaining balance of ${pricing['remaining']:.2f} will be charged 2 days before event.",
                     },
                     'unit_amount': int(round(pricing['deposit'] * 100)), # Stripe uses cents
                 },

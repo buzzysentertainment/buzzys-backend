@@ -189,6 +189,10 @@ async def create_checkout(data: dict):
         session = stripe.checkout.Session.create(
             customer=customer.id,
             payment_method_types=['card'],
+            allow_promotion_codes=True,
+            phone_number_collection={
+                'enabled': True
+            },    
             line_items=[{
                 'price_data': {
                     'currency': 'usd',

@@ -226,6 +226,7 @@ async def create_checkout(data: dict):
             "pickupTime": data.get("pickupTime") or data.get("endTime"),  
             "items": cart_items,
             "setupType": data.get("setupType", "dry"),
+            "anchoring": data.get("anchoring", "Stakes"),
             "address": delivery_address_display,
             "pricing_breakdown": pricing,
             "deposit": pricing["deposit"],

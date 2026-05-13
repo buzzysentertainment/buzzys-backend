@@ -1,9 +1,9 @@
 import os
 import json
 from datetime import datetime
+import pytz
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from app.root_schema import build_calendar_payload
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CALENDAR_ID = "buzzysentertainment@gmail.com"  # Owner's Google Calendar email
@@ -11,21 +11,31 @@ CALENDAR_ID = "buzzysentertainment@gmail.com"  # Owner's Google Calendar email
 
 def get_calendar_service():
     """
-    Loads Google service account credentials from the Render environment variable
+    Loads Google service account credentials from the environment variable
     GOOGLE_SERVICE_ACCOUNT_JSON instead of a local file.
     """
-
-    # Load JSON string from environment
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
-
-    # Build credentials object
     creds = service_account.Credentials.from_service_account_info(
         service_account_info,
         scopes=SCOPES,
     )
-
-    # Build Google Calendar API client
     return build("calendar", "v3", credentials=creds)
+
+
+def build_event_times(booking):
+    """
+    Combine booking date + delivery/pickup times into proper ISO datetimes.
+    """
+    tz = pytz.timezone("America/Chicago")  # adjust to your client’s timezone
+    raw_date = booking.get("date")  # e.g. "05/20/2026"
+    start_time = booking.get("deliveryTime", "10:00 AM")
+    end_time = booking.get("pickupTime", "6:00 PM")
+
+    # Parse MM/DD/YYYY + time → datetime
+    start_dt = tz.localize(datetime.strptime(f"{raw_date} {start_time}", "%m/%d/%Y %I:%M %p"))
+    end_dt = tz.localize(datetime.strptime(f"{raw_date} {end_time}", "%m/%d/%Y %I:%M %p"))
+
+    return start_dt.isoformat(), end_dt.isoformat()
 
 
 def create_booking_event(booking):
@@ -43,17 +53,15 @@ def create_booking_event(booking):
         f"Status: {booking.get('status', 'Pending')}"
     )
 
-    # Convert MM/DD/YYYY → YYYY-MM-DD
-    raw_date = booking.get("date")
-    parsed = datetime.strptime(raw_date, "%m/%d/%Y")
-    google_date = parsed.strftime("%Y-%m-%d")
+    # Build proper start/end times
+    start, end = build_event_times(booking)
 
     event_body = {
         "summary": summary,
         "location": location,
         "description": description,
-        "start": {"date": google_date},
-        "end": {"date": google_date},
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
     }
 
     event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
@@ -75,17 +83,15 @@ def update_booking_event(event_id, booking):
         f"Status: {booking.get('paymentStatus', 'Pending')}"
     )
 
-    # Convert MM/DD/YYYY → YYYY-MM-DD
-    raw_date = booking.get("date")
-    parsed = datetime.strptime(raw_date, "%m/%d/%Y")
-    google_date = parsed.strftime("%Y-%m-%d")
+    # Build proper start/end times
+    start, end = build_event_times(booking)
 
     event_body = {
         "summary": summary,
         "location": location,
         "description": description,
-        "start": {"date": google_date},
-        "end": {"date": google_date},
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
     }
 
     updated_event = service.events().update(

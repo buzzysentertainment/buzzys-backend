@@ -290,7 +290,19 @@ async def stripe_webhook(request: Request):
                 # Triggers
                 handle_deposit_received(booking)
                 try:
-                    create_booking_event(booking)
+                    # Normalize date + times
+                    start, end = build_event_times(booking)
+
+                    # Create event with proper ISO datetimes
+                    event_id = create_booking_event({
+                    **booking,
+                    "start": start,
+                    "end": end
+                    })
+
+                    # Save event ID in Firebase
+                    doc_ref.update({"google_event_id": event_id})
+
                 except Exception as e:
                     print(f"Calendar Sync Error: {e}")
 

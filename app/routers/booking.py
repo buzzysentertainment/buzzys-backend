@@ -59,7 +59,7 @@ def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_ch
     elif referral_type == "Repeat":
         referral_discount_amount = raw_subtotal * 0.10
         
-    percent_discount_amount = raw_subtotal * (promo_percent ah/ 100)   
+    percent_discount_amount = raw_subtotal * (promo_percent / 100)   
     total_discounts = referral_discount_amount + promo_discount + percent_discount_amount
 
     subtotal_after_discount = max(0, raw_subtotal - total_discounts)

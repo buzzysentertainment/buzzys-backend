@@ -7,6 +7,7 @@ from app.services.firebase_setup import db
 from svix.webhooks import Webhook, WebhookVerificationError
 from square.client import Client
 from square.utilities.webhooks_helper import is_valid_webhook_event_signature
+from app.automation.lifecycle import run_lifecycle
 from datetime import datetime, timedelta
 import stripe
 import os
@@ -58,7 +59,7 @@ def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_ch
     elif referral_type == "Repeat":
         referral_discount_amount = raw_subtotal * 0.10
         
-    percent_discount_amount = raw_subtotal * (promo_percent / 100)   
+    percent_discount_amount = raw_subtotal * (promo_percent ah/ 100)   
     total_discounts = referral_discount_amount + promo_discount + percent_discount_amount
 
     subtotal_after_discount = max(0, raw_subtotal - total_discounts)
@@ -310,54 +311,11 @@ async def stripe_webhook(request: Request):
     return {"status": "ok"}
 
 
-@router.post("/automate-lifecycle")
-def automate_lifecycle(request: Request):
-    if request.headers.get("X-Cron-Auth") != os.getenv("CRON_SECRET_KEY"):
-        raise HTTPException(status_code=403)
-        
-    today_dt = datetime.utcnow()
-    target_autopay = (today_dt + timedelta(days=2)).strftime("%Y-%m-%d")
-    
-    # 1. Stripe Autopay (2 days before)
-    autopay_docs = db.collection("bookings")\
-        .where("date", "==", target_autopay)\
-        .where("paymentStatus", "==", "deposit_paid")\
-        .where("saveCardForAutopay", "==", True).stream()
 
-    for doc in autopay_docs:
-        b = doc.to_dict()
-        cust_id = b.get("stripe_customer_id")
-        pm_id = b.get("stripe_payment_method_id")
-
-        if cust_id and pm_id:
-            try:
-                stripe.PaymentIntent.create(
-                    amount=int(round(b["remaining"] * 100)),
-                    currency='usd',
-                    customer=cust_id,
-                    payment_method=pm_id,
-                    off_session=True, 
-                    confirm=True,
-                    description=f"Autopay Final Balance - Booking {b['booking_id']}",
-                    metadata={'booking_id': b['booking_id']}
-                )
-                doc.reference.update({"paymentStatus": "balance_paid"})
-                handle_balance_paid(b)
-            except stripe.error.StripeError as e:
-                print(f"Autopay Failed for {b['booking_id']}: {e}")
-                handle_payment_declined(b)
-
-    # 2. Event Reminders (Day of)
-    today_str = today_dt.strftime("%Y-%m-%d")
-    reminder_docs = db.collection("bookings").where("date", "==", today_str).where("status", "==", "active").stream()
-    for doc in reminder_docs:
-        handle_event_reminder(doc.to_dict())
-
-    return {"status": "success"}
-    
     
 @router.get("/all")
 def get_all_bookings():
+    run_lifecycle()
     docs = db.collection("bookings").stream()
     cleaned = []
     for doc in docs:
@@ -366,3 +324,11 @@ def get_all_bookings():
         cleaned.append(b)
     cleaned.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return cleaned
+    
+@router.get("/admin/run-catchup")
+def run_catchup():
+    run_overdue_autopay()
+    fix_old_dates()
+    fix_remaining_fields()
+    return {"status": "catchup_complete"}
+    

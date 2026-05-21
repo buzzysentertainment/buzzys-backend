@@ -220,3 +220,28 @@ def get_calendar_events(user=Depends(verify_admin_token)):
         })
 
     return {"events": events_by_date}
+    
+@router.get("/settings/promotions")
+def get_promotions_settings(user=Depends(verify_admin_token)):
+    doc_ref = db.collection("siteSettings").document("promotions").get()
+    if not doc_ref.exists:
+        return {"enabled": False, "message": ""}
+
+    data = doc_ref.to_dict()
+    return {
+        "enabled": data.get("enabled", False),
+        "message": data.get("message", "")
+    }
+
+@router.put("/settings/promotions")
+def update_promotions_settings(payload: dict, user=Depends(verify_admin_token)):
+    enabled = payload.get("enabled", False)
+    message = payload.get("message", "")
+
+    db.collection("siteSettings").document("promotions").set({
+        "enabled": enabled,
+        "message": message,
+        "updatedAt": firestore.SERVER_TIMESTAMP
+    })
+
+    return {"message": "Promotions updated"}

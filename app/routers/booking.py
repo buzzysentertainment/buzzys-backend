@@ -325,6 +325,15 @@ def get_all_bookings():
     cleaned.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return cleaned
     
+@router.get("/run-autopay")
+def run_autopay_helper():
+    """
+    Helper endpoint to run autopay lifecycle without loading the bookings page.
+    This allows autopay to run automatically via cron or external scheduler.
+    """
+    results = run_lifecycle()
+    return {"status": "autopay_executed", "details": str(results)}
+    
 @router.get("/admin/run-catchup")
 def run_catchup():
     run_overdue_autopay()

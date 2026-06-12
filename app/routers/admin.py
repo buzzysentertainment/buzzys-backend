@@ -232,7 +232,30 @@ def get_promotions_settings(user=Depends(verify_admin_token)):
         "enabled": data.get("enabled", False),
         "message": data.get("message", "")
     }
-
+# -------------------------
+# CREATE NEW BOOKING (In-Person / Admin Manual)
+# -------------------------
+@router.post("/bookings")
+def create_new_booking(booking_data: dict, user=Depends(verify_admin_token)):
+    try:
+        # 1. Let Firestore auto-generate a new unique document ID
+        new_doc_ref = db.collection("bookings").document()
+        
+        # 2. Add timestamps or server tracking parameters if needed
+        booking_data["createdAt"] = firestore.SERVER_TIMESTAMP
+        
+        # 3. Save the new payload into Firestore
+        new_doc_ref.set(booking_data)
+        
+        return {
+            "message": "In-person booking created successfully", 
+            "id": new_doc_ref.id
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create document: {str(e)}")
+        
+        
 @router.put("/settings/promotions")
 def update_promotions_settings(payload: dict, user=Depends(verify_admin_token)):
     enabled = payload.get("enabled", False)

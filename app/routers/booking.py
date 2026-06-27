@@ -273,8 +273,15 @@ async def stripe_webhook(request: Request):
         session = event['data']['object']
         booking_id = session['metadata'].get('booking_id')
         
-        # Retrieve the payment intent to get the payment method ID for later autopay
-        intent = stripe.PaymentIntent.retrieve(session.payment_intent)
+        payment_intent_id = session.get('payment_intent')
+        
+        if payment_intent_id:
+            intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            payment_method = intent.payment_method
+            intent_id = intent.id
+        else:
+            payment_method = None
+            intent_id = None
         
         if booking_id:
             doc_ref = db.collection("bookings").document(booking_id)
@@ -283,8 +290,8 @@ async def stripe_webhook(request: Request):
             if booking and booking.get("paymentStatus") != "deposit_paid":
                 update_payload = {
                     "paymentStatus": "deposit_paid",
-                    "stripe_payment_method_id": intent.payment_method,
-                    "stripe_payment_intent": intent.id
+                    "stripe_payment_method_id": payment_method,
+                    "stripe_payment_intent": intent_id
                 }
                 doc_ref.update(update_payload)
                 booking.update(update_payload)

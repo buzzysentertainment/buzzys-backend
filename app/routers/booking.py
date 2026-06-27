@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from app.root_schema import normalize_payload, validate_payload, build_square_metadata, build_resend_params
-from app.services.google_calendar import create_booking_event, update_booking_event
 from app.services.email_service import send_email_template, send_email_from_file
 from app.services.firebase_setup import db
 from svix.webhooks import Webhook, WebhookVerificationError
@@ -9,6 +8,7 @@ from square.client import Client
 from square.utilities.webhooks_helper import is_valid_webhook_event_signature
 from app.automation.lifecycle import run_lifecycle
 from datetime import datetime, timedelta
+from .google_calendar import build_event_times, create_booking_event
 import stripe
 import os
 import uuid

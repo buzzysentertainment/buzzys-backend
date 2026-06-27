@@ -270,10 +270,15 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     if event['type'] == 'checkout.session.completed':
-        session = event['data']['object']
-        booking_id = session['metadata'].get('booking_id')
         
-        payment_intent_id = session.get('payment_intent')
+        session = event['data']['object']
+        
+        session_dict = session.to_dict()
+        
+        metadata = session_dict.get('metadata', {})
+        booking_id = metadata.get('booking_id')
+        payment_intent_id = session_dict.get('payment_intent')
+       
         
         if payment_intent_id:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)

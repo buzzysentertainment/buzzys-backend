@@ -6,7 +6,7 @@ from app.services.firebase_setup import db
 from svix.webhooks import Webhook, WebhookVerificationError
 from square.client import Client
 from square.utilities.webhooks_helper import is_valid_webhook_event_signature
-from app.automation.lifecycle import run_lifecycle
+from app.automation.lifecycle import run_lifecycle, run_overdue_autopay, fix_old_dates, fix_remaining_fields
 from datetime import datetime, timedelta
 from .google_calendar import build_event_times, create_booking_event
 import stripe
@@ -86,14 +86,23 @@ def calculate_totals(raw_subtotal, referral_type, damage_waiver_opt, distance_ch
         "deposit": deposit,
         "remaining": remaining
     }
-
+def make_canonical_date(date_str: str) -> str:
+    """
+    Ensures any date string entering the system is stripped of whitespace
+    and strictly formatted as YYYY-MM-DD.
+    """
+    if not date_str:
+        return ""
+    clean_date = date_str.split(" ")[0].strip()
+    return clean_date
 # ---------------------------------------------------------
 # CORE ROUTES
 # ---------------------------------------------------------
 
 @router.post("/check-availability")
 async def check_availability(data: dict):
-    target_date = data.get("date") or data.get("eventDate")
+    raw_date = data.get("date") or data.get("eventDate")
+    target_date = make_canonical_date(raw_date)
     requested_item_titles = data.get("items") or []
 
     if not target_date:
@@ -150,8 +159,9 @@ async def create_checkout(data: dict):
     customer_name = data.get("customerName") or data.get("name") or canonical.get("name") or "Valued Customer"
     customer_email = data.get("customerEmail") or data.get("email") or canonical.get("email") or ""
     customer_phone = data.get("customerPhone") or data.get("phone") or canonical.get("phone") or ""
-    booking_date = data.get("eventDate") or data.get("date") or canonical.get("date") or ""
-
+    raw_date = data.get("eventDate") or data.get("date") or canonical.get("date") or ""
+    booking_date = make_canonical_date(raw_date)
+    
     # 2. Address Display (For Firebase Records)
     raw_addr = data.get("address") or {}
     if isinstance(raw_addr, dict):

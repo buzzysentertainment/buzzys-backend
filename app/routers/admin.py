@@ -238,13 +238,43 @@ def get_promotions_settings(user=Depends(verify_admin_token)):
 @router.post("/bookings")
 def create_new_booking(booking_data: dict, user=Depends(verify_admin_token)):
     try:
-        # 1. Let Firestore auto-generate a new unique document ID
-        new_doc_ref = db.collection("bookings").document()
+        raw_date = booking_data.get("date") or booking_data.get("eventDate") or ""
+        if not raw_date:
+            raise HTTPException(status_code=400, detail="An event date is required.")
+            
+        booking_date = raw_date.split(" ")[0].strip()
+        booking_data["date"] = booking_date
+        booking_data["eventDate"] = booking_date
         
-        # 2. Add timestamps or server tracking parameters if needed
+        requested_items = booking_data.get("items") or []
+        requested_titles = [i.get("title") or i.get("name") for i in requested_items if i.get("title") or i.get("name")]
+        
+        # Pull all entries for this date to safely look for conflicts across active statuses
+        bookings_ref = db.collection("bookings")
+        date_query = bookings_ref.where("date", "==", booking_date).stream()
+        
+        for doc in date_query:
+            existing = doc.to_dict()
+            if existing.get("paymentStatus") == "failed":
+                continue
+            for existing_item in existing.get("items", []):
+                existing_title = existing_item.get("title") or existing_item.get("name")
+                if existing_title in requested_titles:
+                   raise HTTPException(
+                       status_code=400,
+                       detail=f"Double-Booking Conflict! '{existing_title}' is already scheduled for {booking_date}."
+                   )
+        
+        booking_data["status"] = booking_data.get("status") or "Active"
+        booking_data["paymentStatus"] = booking_data.get("paymentStatus") or "confirmed"
         booking_data["createdAt"] = firestore.SERVER_TIMESTAMP
-        
-        # 3. Save the new payload into Firestore
+        booking_data["history"] = [{
+            "type": "creation",
+            "message": "Manual in-person order created by administrator.",
+            "timestamp": datetime.utcnow().isoformat()
+        }]
+
+        new_doc_ref = db.collection("bookings").document()
         new_doc_ref.set(booking_data)
         
         return {
@@ -252,10 +282,11 @@ def create_new_booking(booking_data: dict, user=Depends(verify_admin_token)):
             "id": new_doc_ref.id
         }
         
+    except HTTPException as he:
+        # Pass through the 400 double-booking messages cleanly
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create document: {str(e)}")
-        
-        
 @router.put("/settings/promotions")
 def update_promotions_settings(payload: dict, user=Depends(verify_admin_token)):
     enabled = payload.get("enabled", False)

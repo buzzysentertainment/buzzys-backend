@@ -115,6 +115,12 @@ async def check_availability(data: dict):
         existing_booking = doc.to_dict()
         if existing_booking.get("paymentStatus") == "failed":
             continue
+            
+        is_manual = existing_booking.get("source") == "Manual In-Person Entry" or existing_booking.get("paymentStatus") == "confirmed"
+        is_deposit_paid = existing_booking.get("paymentStatus") == "deposit_paid"
+        
+        if not (is_deposit_paid or is_manual):
+            continue
 
         existing_items = existing_booking.get("items", [])
         for item in existing_items:

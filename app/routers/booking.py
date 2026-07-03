@@ -142,9 +142,14 @@ async def validate_coupon(data: dict):
     
     promo = promo_ref.to_dict()
     if "expiry" in promo:
-        if datetime.utcnow() > promo["expiry"].replace(tzinfo=None):
+        expiry_date = promo["expiry"]
+        if expiry_date.tzinfo is not None
+            current_time = datetime.now(timezone.utc)
+        else:
+            current_time = datetime.now()
+        if current_time > expiry_date:
             return {"valid": False, "message": "This code has expired."}
-            
+          
     return {
         "valid": True,
         "amountOff": promo.get("amount", 0),
@@ -286,15 +291,13 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     if event['type'] == 'checkout.session.completed':
-        
         session = event['data']['object']
-        
         session_dict = session.to_dict()
         
         metadata = session_dict.get('metadata', {})
         booking_id = metadata.get('booking_id')
+        customer_id = session_dict.get('customer') # Fixed: Extracted customer ID
         payment_intent_id = session_dict.get('payment_intent')
-       
         
         if payment_intent_id:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
@@ -317,24 +320,48 @@ async def stripe_webhook(request: Request):
                 doc_ref.update(update_payload)
                 booking.update(update_payload)
                 
-                # Triggers
+                # 1. Fire Lifecycle Triggers
                 handle_deposit_received(booking)
+                
+                # 2. Handle Stripe Auto-Invoicing Independently
                 try:
-                    # Normalize date + times
+                    remaining_balance = booking.get("remaining", 0)
+                    event_date_str = booking.get("date")
+                    
+                    if remaining_balance > 0 and event_date_str and customer_id:
+                        event_date = datetime.strptime(event_date_str, "%Y-%m-%d")
+                        due_date = event_date - timedelta(days=2)
+                        due_date_timestamp = int(due_date.timestamp())
+                        
+                        stripe.InvoiceItem.create(
+                            customer=customer_id,
+                            amount=int(round(remaining_balance * 100)),
+                            currency="usd",
+                            description=f"Remaining Balance for Inflatable Rental on {event_date_str}"
+                        )
+                        invoice = stripe.Invoice.create(
+                            customer=customer_id,
+                            collection_method="send_invoice",
+                            due_date=due_date_timestamp,
+                            footer="Invoice due 2 days before your event. Thank you for booking with us!"
+                        )
+                        
+                        stripe.Invoice.send_invoice(invoice.id)
+                        doc_ref.update({"stripe_remaining_invoice_id": invoice.id})
+                except Exception as invoice_err:    
+                    print(f"Stripe Auto-Invoice Generation Failed: {invoice_err}")
+                    
+                # 3. Handle Google Calendar Sync Independently
+                try:
                     start, end = build_event_times(booking)
-
-                    # Create event with proper ISO datetimes
                     event_id = create_booking_event({
-                    **booking,
-                    "start": start,
-                    "end": end
+                        **booking,
+                        "start": start,
+                        "end": end
                     })
-
-                    # Save event ID in Firebase
                     doc_ref.update({"google_event_id": event_id})
-
-                except Exception as e:
-                    print(f"Calendar Sync Error: {e}")
+                except Exception as cal_err:
+                    print(f"Calendar Sync Error: {cal_err}")
 
     return {"status": "ok"}
 

@@ -143,10 +143,12 @@ async def validate_coupon(data: dict):
     promo = promo_ref.to_dict()
     if "expiry" in promo:
         expiry_date = promo["expiry"]
-        if expiry_date.tzinfo is not None
+        # Added the missing colon right here
+        if expiry_date.tzinfo is not None:
             current_time = datetime.now(timezone.utc)
         else:
             current_time = datetime.now()
+            
         if current_time > expiry_date:
             return {"valid": False, "message": "This code has expired."}
           

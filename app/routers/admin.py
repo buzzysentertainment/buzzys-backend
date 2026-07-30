@@ -3,8 +3,52 @@ from app.auth import verify_admin_token
 from app.services.firebase_setup import db
 from google.cloud import firestore
 from datetime import datetime
+import os
+import requests
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
+
+BUSINESS_ADDRESS = "69 Thompson Road SE, Silver Creek, GA 30173"
+
+
+def calculate_mileage_fee(miles: int) -> float:
+    if miles <= 10:
+        return 0
+    if miles <= 20:
+        return 10
+    if miles <= 30:
+        return 20
+    if miles <= 40:
+        return 27
+    return 27 + (miles - 40) * 3
+
+
+def lookup_distance_miles(destination: str) -> int:
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_MAPS_API_KEY is not configured")
+
+    response = requests.get(
+        "https://maps.googleapis.com/maps/api/distancematrix/json",
+        params={
+            "origins": BUSINESS_ADDRESS,
+            "destinations": destination,
+            "units": "imperial",
+            "key": api_key,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status") != "OK":
+        raise RuntimeError(f"Google API error: {payload.get('status', 'Unknown')}")
+
+    element = payload["rows"][0]["elements"][0]
+    if element.get("status") != "OK":
+        raise RuntimeError(f"Google route error: {element.get('status', 'Unknown')}")
+
+    meters = element["distance"]["value"]
+    return round(meters * 0.000621371)
 
 
 # -------------------------
@@ -55,6 +99,48 @@ def get_all_bookings(user=Depends(verify_admin_token)):
         bookings.append(data)
 
     return {"bookings": bookings}
+
+
+@router.post("/bookings/backfill-mileage")
+def backfill_booking_mileage(user=Depends(verify_admin_token)):
+    updated = []
+    skipped = []
+    failed = []
+
+    for doc in db.collection("bookings").stream():
+        data = doc.to_dict()
+        if data.get("distance") is not None:
+            skipped.append({"id": doc.id, "reason": "already populated"})
+            continue
+
+        address = str(data.get("address") or data.get("location") or "").strip()
+        if not address or address.lower() == "not provided":
+            skipped.append({"id": doc.id, "reason": "missing address"})
+            continue
+
+        try:
+            miles = lookup_distance_miles(address)
+            mileage_fee = calculate_mileage_fee(miles) * 4
+            doc.reference.update({
+                "distance": miles,
+                "mileageFee": mileage_fee,
+                "mileageBackfilledAt": firestore.SERVER_TIMESTAMP,
+            })
+            updated.append({
+                "id": doc.id,
+                "distance": miles,
+                "mileageFee": mileage_fee,
+            })
+        except Exception as exc:
+            failed.append({"id": doc.id, "reason": str(exc)})
+
+    return {
+        "updated": len(updated),
+        "skipped": len(skipped),
+        "failed": len(failed),
+        "updatedBookings": updated,
+        "failures": failed,
+    }
 
 
 # -------------------------

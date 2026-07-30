@@ -187,12 +187,26 @@ async def create_checkout(data: dict):
     # 3. Pricing Calculation
     cart_items = data.get("cart") or data.get("items") or []
     raw_subtotal = sum(float(i.get("price", 0)) for i in cart_items)
-    
+    item_setup_types = {
+        str(item.get("mode", "")).lower()
+        for item in cart_items
+        if str(item.get("mode", "")).lower() in {"wet", "dry"}
+    }
+    setup_type = str(data.get("setupType") or data.get("mode") or "").lower()
+    if setup_type not in {"wet", "dry", "mixed"}:
+        setup_type = (
+            next(iter(item_setup_types))
+            if len(item_setup_types) == 1
+            else "mixed" if len(item_setup_types) > 1 else "dry"
+        )
+    mileage_fee = float(data.get("mileageFee", 0))
+    distance = float(data.get("distance", 0))
+
     pricing = calculate_totals(
         raw_subtotal,
         data.get("referralType", "None"),
         data.get("damageWaiver", False),
-        float(data.get("mileageFee", 0)),
+        mileage_fee,
         float(data.get("staffFee", 0)),
         data.get("isTaxExempt", False),
         promo_discount=float(data.get("discount", 0)),
@@ -249,10 +263,13 @@ async def create_checkout(data: dict):
             "deliveryTime": data.get("deliveryTime") or data.get("startTime"),
             "pickupTime": data.get("pickupTime") or data.get("endTime"),  
             "items": cart_items,
-            "setupType": data.get("setupType", "dry"),
+            "setupType": setup_type,
+            "mode": setup_type,
             "anchoring": data.get("anchoring", "Stakes"),
             "address": delivery_address_display,
             "pricing_breakdown": pricing,
+            "distance": distance,
+            "mileageFee": mileage_fee,
             "deposit": pricing["deposit"],
             "remaining": pricing["remaining"],
             "saveCardForAutopay": data.get("saveCardForAutopay", True),
@@ -397,4 +414,3 @@ def run_catchup():
     fix_old_dates()
     fix_remaining_fields()
     return {"status": "catchup_complete"}
-    

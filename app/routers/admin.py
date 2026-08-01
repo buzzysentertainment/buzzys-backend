@@ -5,6 +5,7 @@ from google.cloud import firestore
 from datetime import datetime
 import os
 import requests
+from app.services.stripe_invoices import ensure_remaining_invoice, record_invoice_failure
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -139,6 +140,37 @@ def backfill_booking_mileage(user=Depends(verify_admin_token)):
         "skipped": len(skipped),
         "failed": len(failed),
         "updatedBookings": updated,
+        "failures": failed,
+    }
+
+
+@router.post("/bookings/recover-stripe-invoices")
+def recover_stripe_invoices(user=Depends(verify_admin_token)):
+    """Create or resend missing balance invoices for paid deposits."""
+    recovered = []
+    skipped = []
+    failed = []
+
+    for doc in db.collection("bookings").stream():
+        booking = doc.to_dict() or {}
+        booking["id"] = doc.id
+
+        if booking.get("paymentStatus") != "deposit_paid":
+            skipped.append({"id": doc.id, "reason": "deposit not paid or balance already paid"})
+            continue
+
+        try:
+            result = ensure_remaining_invoice(booking, doc.reference)
+            recovered.append({"id": doc.id, **result})
+        except Exception as exc:
+            record_invoice_failure(doc.id, exc)
+            failed.append({"id": doc.id, "reason": str(exc)})
+
+    return {
+        "recovered": len(recovered),
+        "skipped": len(skipped),
+        "failed": len(failed),
+        "recoveredBookings": recovered,
         "failures": failed,
     }
 

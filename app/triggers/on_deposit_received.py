@@ -1,58 +1,10 @@
-import os
-import uuid
-from square.client import Client
 from app.services.email_service import send_email_from_file, generate_ics_content
 from app.services.firebase_setup import db
 
 def handle_deposit_received(booking: dict):
-    # --- 1. SQUARE SETUP ---
-    client = Client(
-        access_token=os.getenv("SQUARE_ACCESS_TOKEN"),
-        environment="production"
-    )
-
-    # --- 2. CREATE THE BALANCE INVOICE ---
+    # The Stripe webhook creates the balance invoice before this confirmation.
     remaining_val = booking.get("remaining", 0)
-    remaining_cents = int(float(remaining_val) * 100)
-
-    invoice_body = {
-        "invoice": {
-            "location_id": os.getenv("SQUARE_LOCATION_ID"),
-            "order_id": booking.get("order_id"),
-            "primary_recipient": {
-                "customer_id": booking.get("square_customer_id")
-            },
-            "payment_requests": [{
-                "request_type": "BALANCE",
-                "due_date": booking.get("date"),
-                "amount_money": {
-                    "amount": remaining_cents,
-                    "currency": "USD"
-                }
-            }],
-            "delivery_method": "SHARE_EXTERNALLY",
-            "title": f"Remaining Balance - Event on {booking.get('date')}"
-        },
-        "idempotency_key": str(uuid.uuid4())
-    }
-
-    pay_link = "https://www.buzzys.org/pay"
-
-    try:
-        create_result = client.invoices.create_invoice(body=invoice_body)
-        if create_result.is_success():
-            invoice = create_result.body["invoice"]
-            publish_result = client.invoices.publish_invoice(
-                invoice_id=invoice["id"],
-                body={
-                    "version": invoice["version"],
-                    "idempotency_key": str(uuid.uuid4())
-                }
-            )
-            if publish_result.is_success():
-                pay_link = publish_result.body["invoice"]["public_url"]
-    except Exception as e:
-        print(f"SQUARE INVOICE ERROR: {str(e)}")
+    pay_link = booking.get("stripe_hosted_invoice_url") or "https://www.buzzys.org/pay"
 
     # --- 3. PREPARE ITEM LIST ---
     items_raw = booking.get("items", [])

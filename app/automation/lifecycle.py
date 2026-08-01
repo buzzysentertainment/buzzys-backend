@@ -48,8 +48,11 @@ def get_all_normalized_bookings():
         raw = doc.to_dict()
         raw["id"] = doc.id
 
-        # Canonical normalization
-        clean = normalize_payload(raw)
+        # Canonical normalization while preserving Stripe and automation fields
+        # that are not part of the public booking schema.
+        clean = raw.copy()
+        canonical = normalize_payload(raw)
+        clean.update({key: value for key, value in canonical.items() if value is not None})
 
         # Normalize date formats
         clean["date"] = normalize_date(
@@ -119,17 +122,31 @@ def find_bookings_for_autopay():
 # -----------------------------
 def charge_booking(b):
     try:
-        stripe.PaymentIntent.create(
-            amount=int(round(float(b["remaining"]) * 100)),
-            currency="usd",
-            customer=b["stripe_customer_id"],
-            payment_method=b["stripe_payment_method_id"],
-            off_session=True,
-            confirm=True,
-            description=f"Autopay Final Balance - Booking {b['booking_id']}",
-            metadata={"booking_id": b["booking_id"]}
-        )
-        return True
+        invoice_id = b.get("stripe_remaining_invoice_id")
+        if invoice_id:
+            invoice = stripe.Invoice.retrieve(invoice_id)
+            if invoice.status == "paid":
+                return "invoice"
+            stripe.Invoice.pay(
+                invoice_id,
+                payment_method=b["stripe_payment_method_id"],
+                idempotency_key=f"booking-{b['booking_id']}-autopay-invoice",
+            )
+            return "invoice"
+        else:
+            # Historical fallback for bookings created before Stripe invoices.
+            stripe.PaymentIntent.create(
+                amount=int(round(float(b["remaining"]) * 100)),
+                currency="usd",
+                customer=b["stripe_customer_id"],
+                payment_method=b["stripe_payment_method_id"],
+                off_session=True,
+                confirm=True,
+                description=f"Autopay Final Balance - Booking {b['booking_id']}",
+                metadata={"booking_id": b["booking_id"]},
+                idempotency_key=f"booking-{b['booking_id']}-legacy-autopay",
+            )
+            return "legacy"
     except Exception as e:
         print("Autopay failed:", e)
         return False
@@ -138,11 +155,17 @@ def charge_booking(b):
 # -----------------------------
 # FIRESTORE UPDATES
 # -----------------------------
-def update_firestore_success(b):
+def update_firestore_success(b, payment_source):
     db.collection("bookings").document(b["id"]).update({
         "paymentStatus": "balance_paid"
     })
-    handle_balance_paid(b)
+    # Stripe's invoice.paid webhook owns invoice receipts. Historical direct
+    # PaymentIntents still need the legacy confirmation here.
+    if payment_source == "legacy":
+        handle_balance_paid(b)
+        db.collection("bookings").document(b["id"]).update({
+            "balance_paid_email_sent": True
+        })
 
 def update_firestore_failure(b):
     handle_payment_declined(b)
@@ -155,8 +178,9 @@ def run_lifecycle():
     targets = find_bookings_for_autopay()
 
     for b in targets:
-        if charge_booking(b):
-            update_firestore_success(b)
+        payment_source = charge_booking(b)
+        if payment_source:
+            update_firestore_success(b, payment_source)
         else:
             update_firestore_failure(b)
 def find_overdue_autopay_bookings():
@@ -178,8 +202,9 @@ def run_overdue_autopay():
     overdue = find_overdue_autopay_bookings()
 
     for b in overdue:
-        if charge_booking(b):
-            update_firestore_success(b)
+        payment_source = charge_booking(b)
+        if payment_source:
+            update_firestore_success(b, payment_source)
         else:
             update_firestore_failure(b)
 def find_missing_card_bookings():

@@ -21,6 +21,11 @@ from app.triggers.on_balance_paid import handle_balance_paid
 from app.triggers.on_event_canceled import handle_event_canceled
 from app.triggers.on_event_reminder import handle_event_reminder
 from app.triggers.on_reengagement import send_anniversary_reminders
+from app.services.stripe_invoices import (
+    ensure_remaining_invoice,
+    record_invoice_failure,
+    update_booking_from_invoice,
+)
 
 router = APIRouter(prefix="/book", tags=["booking"])
 
@@ -330,57 +335,68 @@ async def stripe_webhook(request: Request):
             doc_ref = db.collection("bookings").document(booking_id)
             booking = doc_ref.get().to_dict()
             
-            if booking and booking.get("paymentStatus") != "deposit_paid":
+            if booking:
+                needs_deposit_confirmation = not booking.get("deposit_confirmation_sent")
                 update_payload = {
                     "paymentStatus": "deposit_paid",
                     "stripe_payment_method_id": payment_method,
-                    "stripe_payment_intent": intent_id
+                    "stripe_payment_intent": intent_id,
+                    "stripe_customer_id": customer_id or booking.get("stripe_customer_id"),
                 }
                 doc_ref.update(update_payload)
                 booking.update(update_payload)
-                
-                # 1. Fire Lifecycle Triggers
-                handle_deposit_received(booking)
-                
-                # 2. Handle Stripe Auto-Invoicing Independently
+
+                # Create and send the remaining-balance invoice first. Stripe
+                # idempotency keys make webhook retries safe.
                 try:
-                    remaining_balance = booking.get("remaining", 0)
-                    event_date_str = booking.get("date")
-                    
-                    if remaining_balance > 0 and event_date_str and customer_id:
-                        event_date = datetime.strptime(event_date_str, "%Y-%m-%d")
-                        due_date = event_date - timedelta(days=2)
-                        due_date_timestamp = int(due_date.timestamp())
-                        
-                        stripe.InvoiceItem.create(
-                            customer=customer_id,
-                            amount=int(round(remaining_balance * 100)),
-                            currency="usd",
-                            description=f"Remaining Balance for Inflatable Rental on {event_date_str}"
-                        )
-                        invoice = stripe.Invoice.create(
-                            customer=customer_id,
-                            collection_method="send_invoice",
-                            due_date=due_date_timestamp,
-                            footer="Invoice due 2 days before your event. Thank you for booking with us!"
-                        )
-                        
-                        stripe.Invoice.send_invoice(invoice.id)
-                        doc_ref.update({"stripe_remaining_invoice_id": invoice.id})
-                except Exception as invoice_err:    
-                    print(f"Stripe Auto-Invoice Generation Failed: {invoice_err}")
-                    
-                # 3. Handle Google Calendar Sync Independently
-                try:
-                    start, end = build_event_times(booking)
-                    event_id = create_booking_event({
-                        **booking,
-                        "start": start,
-                        "end": end
+                    invoice_result = ensure_remaining_invoice(booking, doc_ref)
+                    booking.update({
+                        "remaining": invoice_result.get("amount", booking.get("remaining", 0)),
+                        "stripe_remaining_invoice_id": invoice_result.get("invoice_id"),
+                        "stripe_hosted_invoice_url": invoice_result.get("hosted_invoice_url"),
                     })
-                    doc_ref.update({"google_event_id": event_id})
-                except Exception as cal_err:
-                    print(f"Calendar Sync Error: {cal_err}")
+                except Exception as invoice_err:
+                    record_invoice_failure(booking_id, invoice_err)
+                    print(f"Stripe Auto-Invoice Generation Failed: {invoice_err}")
+                    # A non-2xx response tells Stripe to retry this event.
+                    raise HTTPException(status_code=500, detail="Remaining balance invoice failed")
+
+                if needs_deposit_confirmation:
+                    # Send the confirmation after the Stripe invoice exists so
+                    # the email can link to the hosted invoice page.
+                    confirmation_result = handle_deposit_received(booking)
+                    if confirmation_result.get("status") == "success":
+                        doc_ref.update({"deposit_confirmation_sent": True})
+
+                if not booking.get("google_event_id"):
+                    try:
+                        start, end = build_event_times(booking)
+                        event_id = create_booking_event({
+                            **booking,
+                            "start": start,
+                            "end": end
+                        })
+                        doc_ref.update({"google_event_id": event_id})
+                    except Exception as cal_err:
+                        print(f"Calendar Sync Error: {cal_err}")
+
+    elif event['type'] == 'invoice.paid':
+        invoice = event['data']['object']
+        booking = update_booking_from_invoice(invoice, "balance_paid")
+        if booking and not booking.get("balance_paid_email_sent"):
+            handle_balance_paid(booking)
+            db.collection("bookings").document(booking["id"]).update({
+                "balance_paid_email_sent": True
+            })
+
+    elif event['type'] == 'invoice.payment_failed':
+        invoice = event['data']['object']
+        booking = update_booking_from_invoice(invoice, "payment_failed")
+        if booking and not booking.get("stripe_invoice_failure_notified"):
+            handle_payment_declined(booking)
+            db.collection("bookings").document(booking["id"]).update({
+                "stripe_invoice_failure_notified": True
+            })
 
     return {"status": "ok"}
 

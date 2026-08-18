@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel
 from app.root_schema import normalize_payload, validate_payload, build_square_metadata, build_resend_params
 from app.services.email_service import send_email_template, send_email_from_file
@@ -304,16 +304,22 @@ async def create_checkout(data: dict):
 # ---------------------------------------------------------
 # WEBHOOKS
 # ---------------------------------------------------------
-@router.post("/webhooks/stripe")
-async def stripe_webhook(request: Request):
-    payload = await request.body()
-    sig_header = request.headers.get('stripe-signature')
+def process_stripe_event(event):
+    """Process a verified Stripe event after the HTTP response is sent."""
+    event_id = event.get("id", "unknown")
+    event_type = event.get("type", "unknown")
 
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid signature")
+        _process_stripe_event(event)
+    except Exception as exc:
+        # Stripe has already received its acknowledgement. Persisted failure
+        # fields and the admin recovery endpoint provide the retry path for
+        # balance invoices without making Stripe wait on external services.
+        print(f"Stripe webhook background processing failed ({event_id}, {event_type}): {exc}")
 
+
+def _process_stripe_event(event):
+    """Perform the slower Stripe, Firestore, email, and calendar work."""
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         session_dict = session.to_dict()
@@ -358,8 +364,7 @@ async def stripe_webhook(request: Request):
                 except Exception as invoice_err:
                     record_invoice_failure(booking_id, invoice_err)
                     print(f"Stripe Auto-Invoice Generation Failed: {invoice_err}")
-                    # A non-2xx response tells Stripe to retry this event.
-                    raise HTTPException(status_code=500, detail="Remaining balance invoice failed")
+                    raise
 
                 if needs_deposit_confirmation:
                     # Send the confirmation after the Stripe invoice exists so
@@ -397,6 +402,20 @@ async def stripe_webhook(request: Request):
             db.collection("bookings").document(booking["id"]).update({
                 "stripe_invoice_failure_notified": True
             })
+
+
+@router.post("/webhooks/stripe", status_code=200)
+async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Verify and acknowledge Stripe immediately; fulfill in the background."""
+    payload = await request.body()
+    sig_header = request.headers.get('stripe-signature')
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    background_tasks.add_task(process_stripe_event, event)
 
     return {"status": "ok"}
 

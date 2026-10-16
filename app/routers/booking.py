@@ -305,8 +305,8 @@ async def create_checkout(data: dict):
 # ---------------------------------------------------------
 def process_stripe_event(event):
     """Process a verified Stripe event after the HTTP response is sent."""
-    event_id = event.get("id", "unknown")
-    event_type = event.get("type", "unknown")
+    event_id = getattr(event, "id", "unknown")
+    event_type = getattr(event, "type", "unknown")
 
     try:
         _process_stripe_event(event)

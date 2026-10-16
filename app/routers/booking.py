@@ -231,7 +231,6 @@ async def create_checkout(data: dict):
         # 'setup_future_usage' allows us to charge the balance 2 days before the event
         session = stripe.checkout.Session.create(
             customer=customer.id,
-            payment_method_types=['card'],
             allow_promotion_codes=True,
             phone_number_collection={
                 'enabled': True
